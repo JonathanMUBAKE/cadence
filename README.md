@@ -1,62 +1,90 @@
-# Prototype : une IA embarquée façon Asana
+# Cadence
 
-Un petit projet Python qui reprend les idées de l'IA d'Asana (AI Teammates, AI Studio) :
-un agent IA qui est un **membre de l'équipe** dans un outil de gestion de projet. Il
-lit le graphe de travail, agit avec ses propres droits, demande une validation
-avant d'écrire et journalise tout ce qu'il fait.
+Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asana (Work Graph, AI Teammates, AI Studio).
+**Node.js + Fastify + SQLite** côté serveur, **React 19 + Vite + Tailwind** côté client, **Claude** pour l'IA.
 
-## Comment fonctionne l'IA d'Asana (ce qu'on en sait publiquement)
+## Fonctionnalités
 
-| Brique Asana | Rôle | Dans ce prototype |
+**Gestion de projet**
+- Projets avec statut, échéance, couleur et icône, sections personnalisables et modèles (Kanban, développement produit, lancement…)
+- Six vues par projet : **Liste**, **Tableau** Kanban en glisser-déposer, **Calendrier**, **Chronologie** (Gantt), **Tableau de bord** (indicateurs, courbe de progression, charge par personne, priorités) et **Automatisations**
+- Tâches complètes : responsable, échéance, priorité, étiquettes, sous-tâches, description, commentaires avec @mentions, historique
+- Accueil personnalisé, page « Mes tâches » groupée par échéance, boîte de réception (mentions, assignations, validations)
+- Membres et rôles par projet : lecteur, commentateur, éditeur, administrateur. Les droits sont appliqués côté serveur.
+- Temps réel (Server-Sent Events) : tout se met à jour sans recharger la page
+- Palette de commandes (⌘K), thème clair/sombre, interface entièrement utilisable sur mobile
+
+**IA embarquée**
+- **Coéquipiers IA** (Atlas, Nova) : ce sont des membres de l'équipe, avec leurs propres droits.
+  - Pour les faire travailler, on peut leur assigner une tâche, les **@mentionner** dans un commentaire ou cliquer sur « Confier à… ».
+  - Ils lisent le contexte (tâche, projet, membres, commentaires, souvenirs), utilisent des outils et rendent un compte rendu.
+- **Validations humaines (checkpoints)** : chaque création, modification ou commentaire de l'IA attend l'accord d'un humain. On peut autoriser, refuser ou **retoucher** l'action avant qu'elle s'exécute.
+- **Assistant Cadence AI** (⌘J) : questions en langage naturel sur vos projets. Il agit avec *vos* droits et ses réponses s'affichent en direct.
+- **Règles IA** (façon AI Studio) : un déclencheur (tâche créée, déplacée, en retard), une consigne en langage naturel et un coéquipier pour l'appliquer.
+- **Actions intelligentes** :
+  - suggérer des sous-tâches ;
+  - réécrire une description ;
+  - rédiger un point d'avancement de projet ;
+  - transformer des notes en vrac en tâches, avec relecture avant création.
+- **Mémoire** rattachée aux projets, et **journal** complet de chaque intervention.
+
+## Démarrer
+
+```bash
+npm install
+npm run build
+npm start                       # http://localhost:4000
+```
+
+Développement avec rechargement à chaud : `npm run dev` lance l'API sur le port 4000 et Vite sur le port 5173.
+
+### Activer Claude
+
+Sans clé, l'IA tourne en **mode démo** : un moteur à règles appelle les mêmes outils, ce qui permet de tester toute la chaîne (droits, validations, journal, temps réel). Pour utiliser Claude :
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm start
+```
+
+Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variable `CADENCE_MODEL`.
+
+| Variable | Rôle | Défaut |
 |---|---|---|
-| **Work Graph** | Modèle de données qui relie tâches, projets, objectifs, personnes. C'est la *source de contexte* de l'IA : Asana a commencé par lui, pas par une base vectorielle. | `teammate/work_graph.py` (SQLite) |
-| **Récupération « filtrer d'abord »** | Le LLM traduit la question (« tâches en retard du projet X ») en **filtres structurés**. La base filtre, puis on trie et on résume avant d'appeler le LLM final. | outil `search_tasks` avec filtres |
-| **AI Teammates** | Agents qu'on **assigne à une tâche** comme un collègue. Ils montrent leur démarche et acceptent des retours. | `AITeammate.work_on_task`, `run_inbox` |
-| **Checkpoints** | Un humain valide ou ajuste une action avant qu'elle soit exécutée. | `approver` sur chaque outil d'écriture |
-| **Contrôles / permissions** | L'agent a des droits explicites dans le graphe, comme un utilisateur. Les admins choisissent les données accessibles. | `memberships` + `PermissionDenied` |
-| **Mémoire** | Chaque souvenir est rattaché à un objet du graphe (projet, document). Ce lien sert à le retrouver et à appliquer les droits. | table `memories`, outil `remember` |
-| **Transparence** | On voit où l'IA intervient et ce qu'elle a fait. | `audit_log` + compte rendu publié en commentaire |
-| **AI Studio (Smart workflows)** | Règles no-code *déclencheur → conditions → actions*, avec des étapes IA écrites en langage naturel. | `run_inbox` sert de déclencheur (à étendre) |
+| `PORT` | Port HTTP | `4000` |
+| `DATABASE_PATH` | Fichier SQLite (`:memory:` pour une base éphémère) | `server/cadence.db` |
+| `ANTHROPIC_API_KEY` | Active Claude | mode démo |
+| `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
+| `COOKIE_SECRET` | Signature des sessions (**à changer en production**) | valeur de développement |
+
+## Tests
+
+```bash
+npm test          # API, droits, agents IA, validations, règles, assistant (Vitest)
+npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
+```
 
 ## Architecture
 
 ```
- Déclencheur (tâche assignée à l'IA, règle, @mention)
-        │
-        ▼
- Construction du contexte ── Work Graph : tâche + projet + objectif
-        │                    + sous-tâches + commentaires + mémoires
-        ▼                    (filtré par les DROITS de l'agent)
- Boucle agent (LLM + outils)
-   ├─ outils de lecture  : search_tasks, get_task, list_users      → exécution directe
-   └─ outils d'écriture  : add_comment, create_task, update_task,  → CHECKPOINT humain
-                           remember                                   puis exécution
-        │
-        ▼
- Journal d'audit + compte rendu publié sur la tâche (transparence)
+server/src
+  db.ts             schéma SQLite (node:sqlite) : le « graphe de travail »
+  services.ts       logique métier, toujours exécutée au nom d'un acteur et soumise à ses droits
+  bus.ts            événements métier → temps réel et déclencheurs IA
+  app.ts            API REST + SSE (Fastify), validation zod, front-end compilé
+  ai/tools.ts       outils exposés au modèle (lecture / écriture), exécutés avec les droits de l'agent
+  ai/engine.ts      boucle d'agent, checkpoints, déclencheurs, règles, actions intelligentes
+  ai/provider.ts    Claude (SDK Anthropic, repli automatique en cas de refus)
+  ai/demo.ts        fournisseur de démonstration sans clé
+web/src
+  pages/            Accueil, Mes tâches, Boîte de réception, Coéquipiers IA, Projet
+  views/            Liste, Tableau, Calendrier, Chronologie, Tableau de bord, Automatisations
+  components/       panneau de tâche, assistant, palette, validations, design system
 ```
 
-## Lancer
+**Principes repris d'Asana.**
+1. **Contexte structuré d'abord.** L'IA part du graphe (tâche → projet → membres → historique) et traduit les questions en filtres précis, plutôt que de tout chercher.
+2. **L'IA est un utilisateur comme un autre.** Elle a des adhésions et des rôles, et chaque outil vérifie ses droits.
+3. **Humain dans la boucle.** Les écritures passent par une validation, sauf si une règle l'autorise explicitement. Tout est journalisé.
 
-```bash
-pip install anthropic pytest
-export ANTHROPIC_API_KEY=...        # ou `ant auth login`
-
-python main.py run                  # Atlas traite ses tâches, vous validez chaque écriture
-python main.py run --auto           # validation automatique
-python main.py ask "Quelles tâches sont en retard et pourquoi ?" --as alice
-python main.py ask "Résume le projet RH" --as bob   # → accès refusé, Bob n'est pas membre
-
-python -m pytest -q                 # tests hors ligne (pas d'appel API)
-```
-
-## Pistes pour aller plus loin
-
-1. **Déclencheurs événementiels** : webhooks « tâche assignée à l'IA » ou « @atlas dans un
-   commentaire » au lieu de `run_inbox`.
-2. **Smart workflows à la AI Studio** : stocker des règles `{trigger, conditions, instructions IA, actions autorisées}` et faire tourner l'agent avec seulement ces outils.
-3. **Politiques de checkpoint** : valider automatiquement les actions à faible risque
-   (commentaire) et demander une validation pour les autres (réassigner, clôturer).
-4. **Plus de contexte** : recherche plein texte ou embeddings sur les documents joints, en
-   gardant le filtrage par droits **avant** la recherche.
-5. **Interface** : afficher les étapes de l'agent en direct (streaming) dans la tâche.
+> Espace de démonstration : la connexion se fait en choisissant un profil, sans mot de passe. Avant une mise en production, branchez une vraie authentification (OAuth/SSO) dans `server/src/app.ts`.

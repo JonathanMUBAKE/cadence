@@ -1,0 +1,22 @@
+{
+  "name": "cadence",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cadence : gestion de projet avec IA embarquée (coéquipiers IA, validations, assistant).",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w server & npm run dev -w web",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "npm run start -w server",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "e2e": "node scripts/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

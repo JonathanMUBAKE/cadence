@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Cadence — système de design
+   Graphite froid, hairlines nettes, accent monochrome ; l'iris est réservé à l'IA. */
+:root {
+  --bg: #FBFBFC;
+  --panel: #FFFFFF;
+  --sidebar: #F5F5F7;
+  --raised: #FFFFFF;
+  --hover: rgba(22, 22, 35, 0.045);
+  --active: rgba(22, 22, 35, 0.08);
+  --line: rgba(22, 22, 35, 0.085);
+  --line-strong: rgba(22, 22, 35, 0.14);
+  --fg: #16161D;
+  --muted: #62626F;
+  --faint: #9A9AA6;
+  --primary: #16161D;
+  --on-primary: #FFFFFF;
+  --ai: #6E56CF;
+  --ai-soft: rgba(110, 86, 207, 0.09);
+  --ai-line: rgba(110, 86, 207, 0.28);
+  --ai-fg: #5B45B8;
+  --success: #1F8A5B;
+  --success-soft: rgba(31, 138, 91, 0.1);
+  --warning: #B4690E;
+  --warning-soft: rgba(214, 140, 31, 0.13);
+  --danger: #D13B3B;
+  --danger-soft: rgba(209, 59, 59, 0.09);
+  --info: #2F6FEB;
+  --info-soft: rgba(47, 111, 235, 0.09);
+  --shadow-sm: 0 1px 2px rgba(16, 16, 30, 0.05);
+  --shadow-md: 0 1px 2px rgba(16, 16, 30, 0.04), 0 6px 20px -6px rgba(16, 16, 30, 0.12);
+  --shadow-lg: 0 2px 4px rgba(16, 16, 30, 0.04), 0 24px 60px -16px rgba(16, 16, 30, 0.28);
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0B0B0F;
+  --panel: #111116;
+  --sidebar: #0E0E13;
+  --raised: #17171D;
+  --hover: rgba(255, 255, 255, 0.045);
+  --active: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.075);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --fg: #EDEDF2;
+  --muted: #9B9BAA;
+  --faint: #66667A;
+  --primary: #EDEDF2;
+  --on-primary: #0B0B0F;
+  --ai: #9E8CFC;
+  --ai-soft: rgba(158, 140, 252, 0.11);
+  --ai-line: rgba(158, 140, 252, 0.32);
+  --ai-fg: #B9ABFF;
+  --success: #3DD68C;
+  --success-soft: rgba(61, 214, 140, 0.11);
+  --warning: #F1A10D;
+  --warning-soft: rgba(241, 161, 13, 0.13);
+  --danger: #FF6369;
+  --danger-soft: rgba(255, 99, 105, 0.11);
+  --info: #70B8FF;
+  --info-soft: rgba(112, 184, 255, 0.11);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 24px 64px -12px rgba(0, 0, 0, 0.75);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-sidebar: var(--sidebar);
+  --color-raised: var(--raised);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-ai: var(--ai);
+  --color-ai-soft: var(--ai-soft);
+  --color-ai-line: var(--ai-line);
+  --color-ai-fg: var(--ai-fg);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --radius-xl: 14px;
+}
+
+@layer base {
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+}
+::selection { background: var(--ai-soft); }
+h1, h2, h3 { text-wrap: balance; letter-spacing: -0.015em; }
+input, textarea, select, button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ai); outline-offset: 2px; border-radius: 6px; }
+.tabular { font-variant-numeric: tabular-nums; }
+}
+
+/* Barres de défilement discrètes */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+/* Bordure animée pour ce que fait l'IA */
+@property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.ai-ring {
+  position: relative;
+  isolation: isolate;
+}
+.ai-ring::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--angle), transparent 0 55%, var(--ai) 75%, #5CC8FF 85%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: spin-angle 2.6s linear infinite;
+  z-index: -1;
+  pointer-events: none;
+}
+@keyframes spin-angle { to { --angle: 360deg; } }
+
+.ai-text {
+  background: linear-gradient(100deg, var(--ai-fg), #4FB3F0 60%, var(--ai-fg));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.shimmer { animation: shimmer 2.4s ease-in-out infinite; }
+@keyframes shimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+.pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+
+.grain {
+  background-image: radial-gradient(1200px 600px at 10% -10%, var(--ai-soft), transparent 60%), radial-gradient(900px 500px at 110% 10%, rgba(79, 179, 240, 0.08), transparent 60%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* Contenu Markdown léger des réponses IA */
+.prose-ai p { margin: 0 0 0.5em; }
+.prose-ai p:last-child { margin-bottom: 0; }
+.prose-ai ul { margin: 0.25em 0 0.5em; padding-left: 1.1em; list-style: disc; }
+.prose-ai li { margin: 0.15em 0; }
+.prose-ai strong { font-weight: 600; }
+.prose-ai code { font-family: var(--font-mono); font-size: 0.9em; background: var(--hover); padding: 0.05em 0.3em; border-radius: 4px; }
