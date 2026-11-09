@@ -79,6 +79,11 @@ export function ProjectPage() {
                 <button disabled={!canEdit} className="flex h-7 items-center rounded-lg px-1.5 hover:bg-hover"><DueChip due={project.due_on} empty={<span className="text-[12.5px] text-faint">Échéance</span>} /></button>
               </DuePicker>
             </div>
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 text-[12.5px] text-muted">
+              <span className="font-mono text-faint">{project.key}</span>
+              {project.team_id && <NavLink to={`/teams/${project.team_id}`} className="hover:text-fg">Équipe {project.team_name}</NavLink>}
+              <span>{project.access === "private" ? "Accès privé" : "Accès : toute l'équipe"}</span>
+            </p>
             {project.description && <p className="mt-1 line-clamp-2 max-w-3xl text-[13px] text-muted">{project.description}</p>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -175,7 +180,7 @@ function Members({ project }: { project: ProjectDetail }) {
               <div key={m.user_id} className="flex h-10 items-center gap-2.5 rounded-md px-1.5 hover:bg-hover">
                 <Avatar user={u} size={24} />
                 <span className="min-w-0 flex-1 truncate text-[13px]">{u?.name}{u?.is_ai && <span className="ml-1.5 text-[11px] text-ai-fg">IA</span>}</span>
-                {isAdmin ? (
+                {m.source === "team" ? <span className="text-[12px] text-faint">via l'équipe · {ROLES.find((r) => r.value === m.role)?.label}</span> : isAdmin ? (
                   <select value={m.role} onChange={(e) => set(m.user_id, e.target.value === "remove" ? null : (e.target.value as Role))} className="rounded-md bg-transparent px-1 py-0.5 text-[12px] text-muted outline-none hover:bg-active">
                     {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}<option value="remove">Retirer</option>
                   </select>

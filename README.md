@@ -1,7 +1,7 @@
 # Cadence
 
 Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asana (Work Graph, AI Teammates, AI Studio).
-**Node.js + Fastify + SQLite** côté serveur, **React 19 + Vite + Tailwind** côté client, **Claude** pour l'IA.
+**Node.js + Fastify + PostgreSQL** (Supabase en production, PGlite embarqué en développement) côté serveur, **React 19 + Vite + Tailwind** côté client, **Claude** pour l'IA.
 
 ## Fonctionnalités
 
@@ -28,6 +28,13 @@ Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asa
   - transformer des notes en vrac en tâches, avec relecture avant création.
 - **Mémoire** rattachée aux projets, et **journal** complet de chaque intervention.
 
+**Organisation du travail** (inspirée d'Asana, Jira, Confluence et Microsoft Project)
+- **Organisations multiples**, étanches entre elles : on passe de l'une à l'autre en un clic.
+- **Organigramme hiérarchique** à profondeur libre : entreprise, filiale, direction, département, service, site. Chaque entité a un responsable, qui voit en lecture les projets de toute sa branche.
+- **Équipes** publiques, sur demande (avec validation) ou privées, rattachées à une entité.
+- **Projets** rattachés à une équipe, avec une clé (`APP-12`) et un accès « toute l'équipe » ou « privé ».
+- **Droits effectifs** calculés en cascade : rôle dans l'organisation, adhésion explicite, appartenance à l'équipe, supervision hiérarchique, visibilité de l'équipe. Les invités ne voient que ce qui leur est partagé.
+
 ## Démarrer
 
 ```bash
@@ -36,7 +43,23 @@ npm run build
 npm start                       # http://localhost:4000
 ```
 
+Sans configuration, la base est un **PostgreSQL embarqué** (PGlite) stocké dans `server/data` : rien à installer. Le jeu de démonstration est créé au premier démarrage.
+
 Développement avec rechargement à chaud : `npm run dev` lance l'API sur le port 4000 et Vite sur le port 5173.
+
+### Héberger la base sur Supabase
+
+1. Créez un projet sur [supabase.com](https://supabase.com).
+2. Ouvrez **Project Settings → Database → Connection string**. Copiez l'URI du **Session pooler** (port 5432), avec votre mot de passe.
+3. Déclarez la chaîne de connexion, appliquez les migrations, puis démarrez :
+   ```bash
+   export DATABASE_URL="postgresql://postgres.<ref>:<mot-de-passe>@aws-0-<région>.pooler.supabase.com:5432/postgres"
+   npm run build && npm run migrate && npm start
+   ```
+   Les migrations s'appliquent aussi automatiquement au démarrage. Elles sont versionnées dans `server/migrations/` et n'agissent qu'une fois.
+4. **Sécurité** : Supabase publie automatiquement le schéma `public` via son API REST (clé « anon »). La migration `002_rls.sql` active la sécurité au niveau des lignes (RLS) sur toutes les tables, sans aucune règle d'accès. Cette API ne renvoie donc rien, ce que vérifie un test automatique. Cadence, propriétaire des tables, n'est pas concerné. Ne partagez jamais la clé `service_role`.
+
+Supabase héberge la base de données, pas le serveur Node.js. Le serveur se déploie sur n'importe quel hébergeur Node : Render, Railway, Fly.io, un VPS ou Docker. Les sauvegardes de la base dépendent de votre offre Supabase.
 
 ### Activer Claude
 
@@ -52,7 +75,8 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | Variable | Rôle | Défaut |
 |---|---|---|
 | `PORT` | Port HTTP | `4000` |
-| `DATABASE_PATH` | Fichier SQLite (`:memory:` pour une base éphémère) | `server/cadence.db` |
+| `DATABASE_URL` | Chaîne de connexion PostgreSQL (Supabase…) | PGlite embarqué |
+| `DATA_DIR` | Dossier du PostgreSQL embarqué (`:memory:` pour une base éphémère) | `server/data` |
 | `ANTHROPIC_API_KEY` | Active Claude | mode démo |
 | `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
 | `COOKIE_SECRET` | Signature des sessions (**à changer en production**) | valeur de développement |
@@ -60,7 +84,7 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 ## Tests
 
 ```bash
-npm test          # API, droits, agents IA, validations, règles, assistant (Vitest)
+npm test          # 40 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 
@@ -68,8 +92,9 @@ npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 
 ```
 server/src
-  db.ts             schéma SQLite (node:sqlite) : le « graphe de travail »
-  services.ts       logique métier, toujours exécutée au nom d'un acteur et soumise à ses droits
+  db.ts             accès PostgreSQL (pg pour Supabase, PGlite embarqué) et migrations
+  ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS)
+  services.ts       logique métier : organisations, entités, équipes, projets, tâches, droits effectifs
   bus.ts            événements métier → temps réel et déclencheurs IA
   app.ts            API REST + SSE (Fastify), validation zod, front-end compilé
   ai/tools.ts       outils exposés au modèle (lecture / écriture), exécutés avec les droits de l'agent

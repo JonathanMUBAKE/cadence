@@ -1,234 +1,107 @@
-import { DatabaseSync } from "node:sqlite";
-
-export type DB = DatabaseSync;
-
-const SCHEMA = `
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  email TEXT,
-  title TEXT,
-  avatar_color TEXT NOT NULL DEFAULT '#6E56CF',
-  is_ai INTEGER NOT NULL DEFAULT 0,
-  ai_role TEXT,
-  ai_instructions TEXT
-);
-
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  color TEXT NOT NULL DEFAULT '#6E56CF',
-  icon TEXT NOT NULL DEFAULT 'rocket',
-  status TEXT NOT NULL DEFAULT 'on_track' CHECK (status IN ('on_track','at_risk','off_track','done')),
-  due_on TEXT,
-  owner_id TEXT REFERENCES users(id),
-  archived INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS memberships (
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('viewer','commenter','editor','admin')),
-  PRIMARY KEY (project_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS sections (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  position REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  number INTEGER NOT NULL,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  section_id TEXT REFERENCES sections(id) ON DELETE SET NULL,
-  parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  assignee_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-  creator_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-  priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('none','low','medium','high','urgent')),
-  start_on TEXT,
-  due_on TEXT,
-  completed INTEGER NOT NULL DEFAULT 0,
-  completed_at TEXT,
-  position REAL NOT NULL,
-  tags TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
-
-CREATE TABLE IF NOT EXISTS comments (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  author_id TEXT NOT NULL REFERENCES users(id),
-  body TEXT NOT NULL,
-  ai_run_id TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS activity (
-  id TEXT PRIMARY KEY,
-  project_id TEXT,
-  task_id TEXT,
-  actor_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  data TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_activity_task ON activity(task_id);
-CREATE INDEX IF NOT EXISTS idx_activity_project ON activity(project_id);
-
-CREATE TABLE IF NOT EXISTS notifications (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
-  title TEXT NOT NULL,
-  body TEXT NOT NULL DEFAULT '',
-  task_id TEXT,
-  project_id TEXT,
-  approval_id TEXT,
-  actor_id TEXT,
-  read INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
-
--- IA ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ai_runs (
-  id TEXT PRIMARY KEY,
-  agent_id TEXT NOT NULL REFERENCES users(id),
-  kind TEXT NOT NULL,
-  task_id TEXT,
-  project_id TEXT,
-  requested_by TEXT,
-  rule_id TEXT,
-  status TEXT NOT NULL CHECK (status IN ('queued','running','waiting_approval','done','failed','cancelled')),
-  summary TEXT,
-  error TEXT,
-  provider TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  finished_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ai_steps (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  tool TEXT,
-  input TEXT,
-  output TEXT,
-  status TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_steps_run ON ai_steps(run_id, seq);
-
-CREATE TABLE IF NOT EXISTS ai_approvals (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
-  agent_id TEXT NOT NULL,
-  task_id TEXT,
-  project_id TEXT,
-  tool TEXT NOT NULL,
-  input TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired')),
-  decided_by TEXT,
-  decided_at TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ai_memories (
-  id TEXT PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  object_type TEXT NOT NULL CHECK (object_type IN ('project','task')),
-  object_id TEXT NOT NULL,
-  project_id TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ai_rules (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  trigger TEXT NOT NULL CHECK (trigger IN ('task_created','task_moved','task_overdue')),
-  section_id TEXT,
-  agent_id TEXT NOT NULL REFERENCES users(id),
-  instructions TEXT NOT NULL,
-  auto_approve INTEGER NOT NULL DEFAULT 0,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_by TEXT,
-  created_at TEXT NOT NULL
-);
-`;
+import { readdirSync, readFileSync, mkdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import pg from "pg";
+import { PGlite } from "@electric-sql/pglite";
 
 /**
- * Migrations versionnées (PRAGMA user_version).
- * SCHEMA crée les tables manquantes ; chaque migration ajoute ce qu'une base plus ancienne n'a pas.
- * Règle : on n'édite jamais une migration publiée, on en ajoute une nouvelle à la fin.
+ * Accès PostgreSQL. Même SQL partout :
+ * - production : Supabase (ou tout PostgreSQL) via `DATABASE_URL` et le pool `pg` ;
+ * - tests et démo : PGlite, PostgreSQL embarqué (en mémoire, ou dans un dossier de données).
  */
-const MIGRATIONS: ((db: DB) => void)[] = [
-  /* v1 */ () => {},
-  /* v2 */ (db) => addColumn(db, "ai_runs", "rule_id", "TEXT"),
-  /* v3 */ (db) => addColumn(db, "comments", "edited_at", "TEXT"),
-];
+export interface Queryable {
+  query<T = Row>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+export interface Db extends Queryable {
+  one<T = Row>(sql: string, params?: unknown[]): Promise<T | undefined>;
+  exec(sql: string): Promise<void>;
+  /** Exécute `fn` dans une transaction ; tout est annulé si elle lève. */
+  tx<T>(fn: (q: Queryable) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+  readonly kind: "pglite" | "postgres";
+}
+export type Row = Record<string, unknown>;
 
-function addColumn(db: DB, table: string, column: string, type: string) {
-  const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
-  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+// Dates calendaires en « AAAA-MM-JJ », horodatages en ISO 8601, partout.
+const DATE = 1082, TIMESTAMPTZ = 1184, TIMESTAMP = 1114;
+const iso = (v: string) => new Date(v).toISOString();
+
+class PgliteDb implements Db {
+  readonly kind = "pglite" as const;
+  constructor(private db: PGlite) {}
+  async query<T>(sql: string, params: unknown[] = []) { return (await this.db.query<T>(sql, params)).rows; }
+  async one<T>(sql: string, params: unknown[] = []) { return (await this.query<T>(sql, params))[0]; }
+  async exec(sql: string) { await this.db.exec(sql); }
+  async tx<T>(fn: (q: Queryable) => Promise<T>) {
+    return this.db.transaction(async (t) => fn({ query: async <R>(sql: string, params: unknown[] = []) => (await t.query<R>(sql, params)).rows }));
+  }
+  async close() { await this.db.close(); }
 }
 
-export function openDb(path = ":memory:"): DB {
-  const db = new DatabaseSync(path);
-  db.exec(SCHEMA);
-  const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    db.exec("BEGIN");
+class PgDb implements Db {
+  readonly kind = "postgres" as const;
+  constructor(private pool: pg.Pool) {}
+  async query<T>(sql: string, params: unknown[] = []) { return (await this.pool.query(sql, params)).rows as T[]; }
+  async one<T>(sql: string, params: unknown[] = []) { return (await this.query<T>(sql, params))[0]; }
+  async exec(sql: string) { await this.pool.query(sql); }
+  async tx<T>(fn: (q: Queryable) => Promise<T>) {
+    const client = await this.pool.connect();
     try {
-      MIGRATIONS[v](db);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
-      db.exec("COMMIT");
+      await client.query("BEGIN");
+      const out = await fn({ query: async <R>(sql: string, params: unknown[] = []) => (await client.query(sql, params)).rows as R[] });
+      await client.query("COMMIT");
+      return out;
     } catch (e) {
-      db.exec("ROLLBACK");
-      throw new Error(`Migration v${v + 1} échouée : ${(e as Error).message}`);
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
     }
   }
+  async close() { await this.pool.end(); }
+}
+
+export interface OpenOptions { url?: string; dataDir?: string; migrationsDir?: string }
+
+export async function openDb(opts: OpenOptions = {}): Promise<Db> {
+  let db: Db;
+  if (opts.url) {
+    pg.types.setTypeParser(DATE, (v) => v);
+    pg.types.setTypeParser(TIMESTAMPTZ, iso);
+    pg.types.setTypeParser(TIMESTAMP, iso);
+    const ssl = /supabase\.(co|com)|sslmode=require/.test(opts.url) ? { rejectUnauthorized: false } : undefined;
+    db = new PgDb(new pg.Pool({ connectionString: opts.url, ssl, max: 10 }));
+  } else {
+    if (opts.dataDir) mkdirSync(opts.dataDir, { recursive: true });
+    const lite = new PGlite({ dataDir: opts.dataDir, parsers: { [DATE]: (v: string) => v, [TIMESTAMPTZ]: iso, [TIMESTAMP]: iso } });
+    db = new PgliteDb(lite);
+  }
+  await migrate(db, opts.migrationsDir);
   return db;
 }
 
-export const now = () => new Date().toISOString();
-export const uid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+const here = dirname(fileURLToPath(import.meta.url));
+export const MIGRATIONS_DIR = resolve(here, "../migrations");
 
-/** Petites aides typées autour de node:sqlite. */
-export function all<T>(db: DB, sql: string, ...params: unknown[]): T[] {
-  return db.prepare(sql).all(...(params as never[])) as T[];
-}
-export function get<T>(db: DB, sql: string, ...params: unknown[]): T | undefined {
-  return db.prepare(sql).get(...(params as never[])) as T | undefined;
-}
-export function run(db: DB, sql: string, ...params: unknown[]) {
-  return db.prepare(sql).run(...(params as never[]));
-}
-export function tx<T>(db: DB, fn: () => T): T {
-  db.exec("BEGIN");
-  try {
-    const out = fn();
-    db.exec("COMMIT");
-    return out;
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
+/** Applique, dans l'ordre et une seule fois, les fichiers `NNN_nom.sql`. */
+export async function migrate(db: Db, dir = MIGRATIONS_DIR) {
+  await db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+  const done = new Set((await db.query<{ version: string }>("SELECT version FROM schema_migrations")).map((r) => r.version));
+  for (const file of readdirSync(dir).filter((f) => /^\d+_.+\.sql$/.test(f)).sort()) {
+    const version = file.split("_")[0];
+    if (done.has(version)) continue;
+    const sql = readFileSync(join(dir, file), "utf8");
+    await db.tx(async (q) => {
+      for (const stmt of splitSql(sql)) await q.query(stmt);
+      await q.query("INSERT INTO schema_migrations (version) VALUES ($1)", [version]);
+    });
   }
 }
+
+/** Découpe un fichier SQL en instructions (pas de fonctions plpgsql dans nos migrations). */
+function splitSql(sql: string) {
+  return sql.replace(/--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean);
+}
+
+export const uid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+export const now = () => new Date().toISOString();

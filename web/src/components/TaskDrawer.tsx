@@ -65,7 +65,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
         <ProjectIcon icon={t.project.icon} color={t.project.color} size={20} />
         <span className="truncate text-[13px] text-muted">{t.project.name}</span>
         {t.section && <><ChevronRight className="size-3.5 text-faint" /><span className="truncate text-[13px] text-muted">{t.section.name}</span></>}
-        <span className="ml-1 font-mono text-[12px] text-faint">#{t.number}</span>
+        <span className="ml-1 font-mono text-[12px] text-faint">{t.key}</span>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton label="Copier le lien" onClick={() => { navigator.clipboard?.writeText(`${location.origin}/projects/${t.project_id}?task=${t.id}`).then(() => toast.success("Lien copié"), () => {}); }}><Copy className="size-4" /></IconButton>
           {canEdit && (
@@ -102,7 +102,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
         <div className="px-4 pb-10 pt-5 sm:px-6">
           {t.parent && (
             <button onClick={() => onOpenTask(t.parent!.id)} className="mb-2 flex items-center gap-1 text-[12.5px] text-muted hover:text-fg">
-              <CornerDownLeft className="size-3.5 rotate-90" />Sous-tâche de <span className="font-mono text-faint">#{t.parent.number}</span> {t.parent.title}
+              <CornerDownLeft className="size-3.5 rotate-90" />Sous-tâche de <span className="font-mono text-faint">{t.parent.key}</span> {t.parent.title}
             </button>
           )}
           <div className="flex items-start gap-3">

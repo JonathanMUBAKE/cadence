@@ -6,7 +6,7 @@ import { Flag, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Avatar, Button, Dialog, PROJECT_ICONS, ProjectIcon, cn } from "./ui";
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker } from "./pickers";
 import { AiBadge } from "./ai";
-import { useProject, useProjects, useUserMap } from "@/lib/hooks";
+import { useMe, useProject, useProjects, useTeams, useUserMap } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { api } from "@/lib/api";
 import type { ParsedTask, ProjectDetail, StatusProposal } from "@/lib/types";
@@ -31,10 +31,21 @@ export function NewProjectDialog() {
   const [template, setTemplate] = useState("kanban");
   const [due, setDue] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { data: teams } = useTeams();
+  const { data: me } = useMe();
+  const orgAdmin = ["owner", "admin"].includes(me?.orgs.find((o) => o.id === me.org_id)?.role ?? "");
+  const myTeams = (teams ?? []).filter((t) => t.my_role || orgAdmin);
+  const [teamId, setTeamId] = useState<string>("");
+  const [key, setKey] = useState("");
+  const [keyTouched, setKeyTouched] = useState(false);
+  const [access, setAccess] = useState<"team" | "private">("team");
+  useEffect(() => { if (shell.newProject) { setTeamId(shell.newProjectTeam ?? myTeams[0]?.id ?? ""); setKey(""); setKeyTouched(false); setAccess("team"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shell.newProject]);
+  const autoKey = name.normalize("NFD").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().replace(/^[0-9]+/, "").padEnd(3, "X").slice(0, 4);
+  const effectiveKey = keyTouched ? key : name.trim() ? autoKey : "";
   const submit = async () => {
     setSaving(true);
     try {
-      const p = await api.post<ProjectDetail>("/api/projects", { name, description, color, icon, due_on: due });
+      const p = await api.post<ProjectDetail>("/api/projects", { name, description, color, icon, due_on: due, team_id: teamId || null, key: effectiveKey || undefined, access });
       // Sections du modèle choisi (le serveur crée le modèle Kanban par défaut)
       const tpl = TEMPLATES.find((t) => t.id === template)!;
       if (template !== "kanban") {
@@ -60,6 +71,25 @@ export function NewProjectDialog() {
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex gap-1.5">{COLORS.map((c) => <button key={c} aria-label={`Couleur ${c}`} onClick={() => setColor(c)} className={cn("size-6 rounded-full ring-offset-2 ring-offset-panel", color === c && "ring-2 ring-fg")} style={{ background: c }} />)}</div>
           <div className="flex gap-1">{PROJECT_ICONS.map((i) => <button key={i} aria-label={`Icône ${i}`} onClick={() => setIcon(i)} className={cn("rounded-lg p-1", icon === i ? "bg-active" : "hover:bg-hover")}><ProjectIcon icon={i} color={color} size={22} /></button>)}</div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_130px]">
+          <label className="text-[12px] font-medium text-muted">Équipe
+            <select value={teamId} onChange={(e) => setTeamId(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-line bg-bg/60 px-2.5 text-[13.5px] text-fg outline-none">
+              {orgAdmin && <option value="">Aucune équipe</option>}
+              {myTeams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </label>
+          <label className="text-[12px] font-medium text-muted">Clé
+            <input value={effectiveKey} onChange={(e) => { setKeyTouched(true); setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)); }} placeholder="APP"
+              className="mt-1 h-9 w-full rounded-lg border border-line bg-bg/60 px-2.5 font-mono text-[13.5px] uppercase text-fg outline-none" />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {([["team", "Toute l'équipe", "Les membres de l'équipe y ont accès"], ["private", "Privé", "Seulement les personnes ajoutées"]] as const).map(([v, l, h]) => (
+            <button key={v} onClick={() => setAccess(v)} className={cn("flex-1 rounded-xl border p-3 text-left", access === v ? "border-fg bg-hover" : "border-line hover:border-line-strong")}>
+              <p className="text-[13px] font-medium">{l}</p><p className="mt-0.5 text-[12px] text-faint">{h}</p>
+            </button>
+          ))}
         </div>
         <div>
           <p className="mb-1.5 text-[12px] font-medium text-muted">Modèle</p>

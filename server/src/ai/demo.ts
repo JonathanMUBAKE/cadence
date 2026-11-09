@@ -59,14 +59,14 @@ export class DemoProvider implements AiProvider {
   // ------------------------------------------------------------ coéquipier assigné
   private async teammate(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
     const { taskId, projectId } = req.hint;
-    const task = taskId ? this.svc.getTask(req.hint.actorId, taskId) : null;
+    const task = taskId ? await this.svc.getTask(req.hint.actorId, taskId) : null;
     if (r.length === 0) {
-      return this.tools(call("get_task", { task: `#${task?.number}` }), call("search_tasks", { project_id: projectId, overdue: true, limit: 10 }));
+      return this.tools(call("get_task", { task: task?.key }), call("search_tasks", { project_id: projectId, overdue: true, limit: 10 }));
     }
     if (r.length === 1) {
       const overdue = (r[0].find((p) => p.name === "search_tasks")?.out as { tasks?: { task: string; title: string; assignee: string | null; due_on: string }[] })?.tasks ?? [];
       const writes: ContentBlock[] = [];
-      for (const t of overdue.filter((x) => x.assignee && x.task !== `#${task?.number}`).slice(0, 3)) {
+      for (const t of overdue.filter((x) => x.assignee && x.task !== task?.key).slice(0, 3)) {
         const first = t.assignee!.split(" ")[0];
         writes.push(call("add_comment", { task: t.task, body: `@${first} petite relance : « ${t.title} » devait être livrée le ${fmt(t.due_on)} (${daysLate(t.due_on)} j de retard). Tu peux me donner une nouvelle date réaliste, ou me dire ce qui bloque ?` }));
       }
@@ -74,7 +74,7 @@ export class DemoProvider implements AiProvider {
         const steps = ["Rassembler les éléments et l'état des lieux", "Produire une première version", "Faire relire et valider"];
         steps.forEach((title, i) => {
           const d = new Date(); d.setDate(d.getDate() + i + 1);
-          writes.push(call("create_task", { project_id: task.project_id, parent: `#${task.number}`, title: `${title}`, due_on: d.toISOString().slice(0, 10) }));
+          writes.push(call("create_task", { project_id: task.project_id, parent: task.key, title: `${title}`, due_on: d.toISOString().slice(0, 10) }));
         });
       }
       if (writes.length) return this.tools(...writes);
@@ -85,7 +85,7 @@ export class DemoProvider implements AiProvider {
     const relances = all.filter((p) => p.name === "add_comment");
     const subs = all.filter((p) => p.name === "create_task");
     const lines = [
-      `**Point sur ${task ? `#${task.number} « ${task.title} »` : "la tâche"}**`,
+      `**Point sur ${task ? `${task.key} « ${task.title} »` : "la tâche"}**`,
       "",
       overdue.length ? `• ${overdue.length} tâche(s) en retard dans le projet : ${overdue.slice(0, 5).map((t) => `${t.task} ${t.title}`).join(", ")}.` : "• Aucune tâche en retard dans le projet.",
       ...(relances.length ? [`• Relances : ${relances.filter((p) => p.ok).length} envoyée(s), ${relances.filter((p) => !p.ok).length} refusée(s) ou en échec.`] : []),
@@ -97,14 +97,14 @@ export class DemoProvider implements AiProvider {
 
   // ------------------------------------------------------------ @mention dans un commentaire
   private async mention(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
-    const task = req.hint.taskId ? this.svc.getTask(req.hint.actorId, req.hint.taskId) : null;
-    if (r.length === 0 && task) return this.tools(call("get_task", { task: `#${task.number}` }));
+    const task = req.hint.taskId ? await this.svc.getTask(req.hint.actorId, req.hint.taskId) : null;
+    if (r.length === 0 && task) return this.tools(call("get_task", { task: task.key }));
     if (!task) return this.say("Je n'ai pas trouvé la tâche concernée.", req);
     const done = task.subtasks.filter((s) => s.completed).length;
-    const who = task.assignee_id ? this.svc.user(task.assignee_id).name : "personne";
+    const who = task.assignee_id ? (await this.svc.user(task.assignee_id)).name : "personne";
     const late = task.due_on && !task.completed && task.due_on < today();
     const text = [
-      `Voici où en est #${task.number} « ${task.title} » :`,
+      `Voici où en est ${task.key} « ${task.title} » :`,
       `• Assignée à ${who}, ${task.completed ? "terminée" : task.section?.name ?? "sans section"}.`,
       task.due_on ? `• Échéance : ${fmt(task.due_on)}${late ? ` — en retard de ${daysLate(task.due_on)} j` : ""}.` : "• Pas d'échéance fixée.",
       task.subtasks.length ? `• Sous-tâches : ${done}/${task.subtasks.length} terminées.` : "• Pas de sous-tâches.",

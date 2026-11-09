@@ -11,7 +11,8 @@ interface Shell {
   palette: boolean;
   setPalette: (v: boolean) => void;
   newProject: boolean;
-  setNewProject: (v: boolean) => void;
+  newProjectTeam: string | null;
+  setNewProject: (v: boolean, teamId?: string | null) => void;
   quickAdd: { open: boolean; projectId: string | null };
   openQuickAdd: (projectId: string | null) => void;
   closeQuickAdd: () => void;
@@ -27,7 +28,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const taskId = params.get("task");
   const [assistant, setAssistant] = useState<{ open: boolean; prompt: string | null }>({ open: false, prompt: null });
   const [palette, setPalette] = useState(false);
-  const [newProject, setNewProject] = useState(false);
+  const [newProject, setNewProjectState] = useState<{ open: boolean; team: string | null }>({ open: false, team: null });
   const [quickAdd, setQuickAdd] = useState<{ open: boolean; projectId: string | null }>({ open: false, projectId: null });
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
@@ -42,7 +43,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Shell>(() => ({
     openTask, closeTask, taskId,
     assistant, openAssistant: (prompt) => setAssistant({ open: true, prompt: prompt ?? null }), closeAssistant: () => setAssistant({ open: false, prompt: null }),
-    palette, setPalette, newProject, setNewProject,
+    palette, setPalette, newProject: newProject.open, newProjectTeam: newProject.team,
+    setNewProject: (v, teamId = null) => setNewProjectState({ open: v, team: v ? teamId : null }),
     quickAdd, openQuickAdd: (projectId) => setQuickAdd({ open: true, projectId }), closeQuickAdd: () => setQuickAdd({ open: false, projectId: null }),
     theme, toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
   }), [openTask, closeTask, taskId, assistant, palette, newProject, quickAdd, theme]);

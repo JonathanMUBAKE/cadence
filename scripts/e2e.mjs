@@ -11,7 +11,7 @@ const PORT = 4321;
 const BASE = `http://localhost:${PORT}`;
 
 const server = spawn(process.execPath, ["server/dist/index.js"], {
-  env: { ...process.env, PORT: String(PORT), DATABASE_PATH: ":memory:", ANTHROPIC_API_KEY: "", NODE_ENV: "test" },
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: ":memory:", ANTHROPIC_API_KEY: "", NODE_ENV: "test" },
   stdio: "inherit",
 });
 const step = (m) => console.log(`  ✓ ${m}`);
@@ -40,11 +40,11 @@ try {
   for (let i = 0; i < 40; i++) {
     const btn = page.getByRole("button", { name: "Autoriser" }).first();
     if (await btn.count()) { if (await btn.click({ timeout: 2000 }).then(() => true, () => false)) approved++; await sleep(300); continue; }
-    if (await page.getByText(/Point sur #\d+/).count()) break;
+    if (await page.getByText(/Point sur [A-Z]+-\d+/).count()) break;
     await sleep(250);
   }
   assert.ok(approved >= 2, `au moins deux validations attendues, reçu ${approved}`);
-  await page.getByText(/Point sur #\d+/).first().waitFor();
+  await page.getByText(/Point sur [A-Z]+-\d+/).first().waitFor();
   step(`Atlas a travaillé, ${approved} action(s) validée(s), compte rendu publié`);
 
   await page.keyboard.press("Escape");

@@ -1,12 +1,15 @@
-import { useId } from "react";
+import { useId, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { NavLink, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronsUpDown, House, Inbox, LogOut, Moon, Plus, Search, Sparkles, Sun } from "lucide-react";
-import { Avatar, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, ProjectIcon, cn } from "./ui";
+import { Building2, Check, CheckCircle2, ChevronsUpDown, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
+import { Avatar, Button, Dialog, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, ProjectIcon, cn } from "./ui";
 import { useAiStatus, useApprovals, useMe, useNotifications, useProjects } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { api } from "@/lib/api";
 import { STATUS } from "@/lib/format";
+
+export const ORG_ROLE: Record<string, string> = { owner: "Propriétaire", admin: "Administrateur", member: "Membre", guest: "Invité" };
 
 export function Logo({ size = 26 }: { size?: number }) {
   const gid = useId().replace(/:/g, "");
@@ -29,6 +32,25 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   const unread = notifs?.filter((n) => !n.read).length ?? 0;
+  const currentOrg = me?.orgs.find((o) => o.id === me.org_id);
+  const [creating, setCreating] = useState(false);
+  const [orgName, setOrgName] = useState("");
+  const groups = useMemo(() => {
+    const m = new Map<string, [string, string | null, NonNullable<typeof projects>]>();
+    for (const p of projects ?? []) {
+      const k = p.team_name ?? "Sans équipe";
+      if (!m.has(k)) m.set(k, [k, p.team_id, []]);
+      m.get(k)![2].push(p);
+    }
+    // Tri à la française (« Équipe » avant « Marketing »), les projets sans équipe en dernier
+    return [...m.values()].sort((a, b) => (a[1] ? 0 : 1) - (b[1] ? 0 : 1) || a[0].localeCompare(b[0], "fr", { sensitivity: "base" }));
+  }, [projects]);
+  // Rechargement complet : aucune donnée (cache, temps réel) de l'organisation précédente ne doit survivre
+  const switchOrg = async (id: string) => { await api.post(`/api/orgs/${id}/switch`); window.location.assign("/"); };
+  const createOrg = async () => {
+    try { await api.post("/api/orgs", { name: orgName }); window.location.assign("/org"); }
+    catch (e) { toast.error((e as Error).message); }
+  };
 
   const link = (to: string, icon: React.ReactNode, label: string, badge?: number, ai?: boolean) => (
     <NavLink to={to} end={to === "/"} onClick={onNavigate}
@@ -48,8 +70,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <button className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-1.5 text-left hover:bg-hover">
               <Logo />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px] font-semibold leading-tight">Cadence</span>
-                <span className="block truncate text-[11.5px] text-faint">Espace Nova Mobile</span>
+                <span className="block truncate text-[13.5px] font-semibold leading-tight">{currentOrg?.name ?? "Cadence"}</span>
+                <span className="block truncate text-[11.5px] text-faint">{currentOrg ? ORG_ROLE[currentOrg.role] : ""}</span>
               </span>
               <ChevronsUpDown className="size-3.5 text-faint" />
             </button>
@@ -57,6 +79,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <MenuContent className="w-[240px]">
             <MenuLabel>Connecté en tant que</MenuLabel>
             <div className="flex items-center gap-2 px-2 pb-2"><Avatar user={me} size={26} /><div className="min-w-0"><p className="truncate text-[13px] font-medium">{me?.name}</p><p className="truncate text-[11.5px] text-faint">{me?.title}</p></div></div>
+            <MenuSeparator />
+            <MenuLabel>Organisations</MenuLabel>
+            {me?.orgs.map((o) => (
+              <MenuItem key={o.id} icon={<Building2 className="size-3.5" />} right={o.id === me.org_id ? <Check className="size-3.5" /> : undefined}
+                onSelect={() => o.id !== me.org_id && switchOrg(o.id)}>{o.name}</MenuItem>
+            ))}
+            <MenuItem icon={<Plus className="size-3.5" />} onSelect={() => setCreating(true)}>Créer une organisation</MenuItem>
             <MenuSeparator />
             <MenuItem icon={shell.theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />} onSelect={shell.toggleTheme}>{shell.theme === "dark" ? "Thème clair" : "Thème sombre"}</MenuItem>
             <MenuItem icon={<LogOut className="size-3.5" />} onSelect={async () => { await api.post("/api/auth/logout"); qc.clear(); nav("/login"); }}>Changer d'utilisateur</MenuItem>
@@ -75,6 +104,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         {link("/my-tasks", <CheckCircle2 className="size-4" />, "Mes tâches")}
         {link("/inbox", <Inbox className="size-4" />, "Boîte de réception", unread)}
         {link("/ai", <Sparkles className="size-4" />, "Coéquipiers IA", approvals?.length, true)}
+        {link("/teams", <Users className="size-4" />, "Équipes")}
+        {link("/org", <Network className="size-4" />, "Organisation")}
       </nav>
 
       <div className="mt-5 flex items-center justify-between px-5 pb-1">
@@ -82,15 +113,29 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <button aria-label="Nouveau projet" onClick={() => shell.setNewProject(true)} className="rounded-md p-0.5 text-faint hover:bg-hover hover:text-fg"><Plus className="size-3.5" /></button>
       </div>
       <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 pb-3">
-        {projects?.map((p) => (
-          <NavLink key={p.id} to={`/projects/${p.id}`} onClick={onNavigate}
-            className={({ isActive }) => cn("group flex h-8 items-center gap-2.5 rounded-lg px-2 text-[13.5px]", isActive ? "bg-active font-medium text-fg" : "text-muted hover:bg-hover hover:text-fg")}>
-            <ProjectIcon icon={p.icon} color={p.color} size={18} />
-            <span className="flex-1 truncate">{p.name}</span>
-            <span className="size-1.5 rounded-full" style={{ background: STATUS[p.status].color }} title={STATUS[p.status].label} />
-          </NavLink>
+        {groups.map(([teamName, teamId, list]) => (
+          <div key={teamName} className="pb-1.5">
+            {teamId
+              ? <NavLink to={`/teams/${teamId}`} onClick={onNavigate} className="flex h-6 items-center gap-1.5 px-2 text-[11.5px] font-medium text-faint hover:text-fg"><Users className="size-3" />{teamName}</NavLink>
+              : <span className="flex h-6 items-center px-2 text-[11.5px] font-medium text-faint">{teamName}</span>}
+            {list.map((p) => (
+              <NavLink key={p.id} to={`/projects/${p.id}`} onClick={onNavigate}
+                className={({ isActive }) => cn("group flex h-8 items-center gap-2.5 rounded-lg px-2 text-[13.5px]", isActive ? "bg-active font-medium text-fg" : "text-muted hover:bg-hover hover:text-fg")}>
+                <ProjectIcon icon={p.icon} color={p.color} size={18} />
+                <span className="flex-1 truncate">{p.name}</span>
+                <span className="size-1.5 rounded-full" style={{ background: STATUS[p.status].color }} title={STATUS[p.status].label} />
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
+
+      <Dialog open={creating} onOpenChange={setCreating} title="Créer une organisation" width={460}
+        description="Un espace étanche, avec ses propres membres, équipes, projets et réglages. Vous en serez propriétaire."
+        footer={<><Button onClick={() => setCreating(false)}>Annuler</Button><Button variant="primary" disabled={!orgName.trim()} onClick={createOrg}>Créer</Button></>}>
+        <input autoFocus value={orgName} onChange={(e) => setOrgName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && orgName.trim() && createOrg()} placeholder="Nom de l'organisation"
+          className="h-10 w-full rounded-lg border border-line bg-bg/60 px-3 text-[14px] outline-none focus:border-line-strong" />
+      </Dialog>
 
       <div className="border-t border-line p-3">
         <button onClick={() => shell.openAssistant()} className="group relative flex w-full items-center gap-2.5 overflow-hidden rounded-xl border border-ai-line bg-ai-soft px-3 py-2.5 text-left">

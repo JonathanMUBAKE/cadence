@@ -3,7 +3,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/re
 import { toast } from "sonner";
 import { api } from "./api";
 import type {
-  AiApproval, AiRule, AiRun, AiRunDetail, Activity, Notification, ProjectDetail, ProjectSummary, Stats, Task, TaskDetail, User,
+  AiApproval, AiRule, AiRun, AiRunDetail, Activity, Me, Notification, OrgUnit, OrgUser, ProjectDetail, ProjectSummary, Stats, Task, TaskDetail, Team, TeamDetail, User,
 } from "./types";
 
 export const queryClient = new QueryClient({
@@ -11,8 +11,11 @@ export const queryClient = new QueryClient({
 });
 
 // ---------------------------------------------------------------- lectures
-export const useMe = () => useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/me"), retry: false });
-export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: () => api.get<User[]>("/api/users"), staleTime: 60_000 });
+export const useMe = () => useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/me"), retry: false });
+export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: () => api.get<OrgUser[]>("/api/users"), staleTime: 60_000 });
+export const useUnits = () => useQuery({ queryKey: ["units"], queryFn: () => api.get<OrgUnit[]>("/api/org/units") });
+export const useTeams = () => useQuery({ queryKey: ["teams"], queryFn: () => api.get<Team[]>("/api/teams") });
+export const useTeam = (id?: string) => useQuery({ queryKey: ["team", id], queryFn: () => api.get<TeamDetail>(`/api/teams/${id}`), enabled: !!id });
 export function useUserMap() {
   const { data } = useUsers();
   return useMemo(() => new Map((data ?? []).map((u) => [u.id, u])), [data]);
@@ -128,6 +131,7 @@ export function useLiveUpdates(enabled: boolean) {
       const e = JSON.parse(m.data) as Live;
       if (e.type === "ai.delta") { deltaListeners.forEach((fn) => fn(e.runId!, e.delta!)); return; }
       if (e.type === "notification") return queue(["notifications"]);
+      if (e.type === "org.changed") return queue(["units"], ["teams"], ["team"], ["users"], ["projects"], ["me"]);
       if (e.type.startsWith("ai.")) {
         queue(["runs"], ["run", e.runId], ["approvals"]);
         if (e.taskId) queue(["task", e.taskId]);

@@ -14,7 +14,8 @@
     "start": "npm run start -w server",
     "test": "npm test -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "migrate": "npm run migrate -w server"
   },
   "engines": {
     "node": ">=22.5"

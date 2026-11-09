@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
-import { get } from "./db.js";
 
 type Ctx = Awaited<ReturnType<typeof buildApp>>;
 let ctx: Ctx;
@@ -19,7 +18,8 @@ const waitFor = async <T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, ms = 
   const t0 = Date.now();
   for (;;) { const v = await fn(); if (ok(v)) return v; if (Date.now() - t0 > ms) throw new Error("timeout"); await new Promise((r) => setTimeout(r, 20)); }
 };
-const projectId = (name: string) => get<{ id: string }>(ctx.db, "SELECT id FROM projects WHERE name LIKE ?", `%${name}%`)!.id;
+const projectId = async (name: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
+const orgId = async () => (await ctx.db.one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Nova Mobile'"))!.id;
 
 beforeEach(async () => {
   ctx = await buildApp({ provider: "demo", demoDelayMs: 0 });
@@ -38,12 +38,12 @@ describe("authentification et droits", () => {
     const karim = (await api("u_karim", "GET", "/api/projects")).body.map((p: { name: string }) => p.name);
     expect(alice).toContain("RH · Recrutements 2027");
     expect(karim).not.toContain("RH · Recrutements 2027");
-    const hr = projectId("RH");
+    const hr = await projectId("RH");
     expect((await api("u_karim", "GET", `/api/projects/${hr}`)).status).toBe(403);
   });
 
   it("un lecteur ne peut pas modifier une tâche", async () => {
-    const app = projectId("Application mobile");
+    const app = await projectId("Application mobile");
     const [task] = (await api("u_hugo", "GET", `/api/projects/${app}/tasks`)).body;
     const res = await api("u_hugo", "PATCH", `/api/tasks/${task.id}`, { title: "Piraté" });
     expect(res.status).toBe(403);
@@ -53,7 +53,7 @@ describe("authentification et droits", () => {
 
 describe("tâches", () => {
   it("crée, déplace, commente et termine une tâche", async () => {
-    const pid = projectId("Application mobile");
+    const pid = await projectId("Application mobile");
     const proj = (await api("u_alice", "GET", `/api/projects/${pid}`)).body;
     const created = await api("u_alice", "POST", "/api/tasks", { project_id: pid, title: "Nouvelle tâche", assignee_id: "u_karim", due_on: "2030-01-15", priority: "high" });
     expect(created.status).toBe(200);
@@ -70,18 +70,18 @@ describe("tâches", () => {
 
     const done = await api("u_karim", "PATCH", `/api/tasks/${created.body.id}`, { completed: true });
     expect(done.body.completed).toBe(true);
-    const detail = (await api("u_alice", "GET", `/api/tasks/${created.body.number}`)).body;
+    const detail = (await api("u_alice", "GET", `/api/tasks/${created.body.key}`)).body;
     expect(detail.activity.map((a: { kind: string }) => a.kind)).toEqual(expect.arrayContaining(["task.created", "task.section_id", "task.completed", "comment.created"]));
   });
 
   it("refuse d'assigner quelqu'un qui n'est pas membre du projet", async () => {
-    const pid = projectId("RH");
+    const pid = await projectId("RH");
     const res = await api("u_alice", "POST", "/api/tasks", { project_id: pid, title: "Test", assignee_id: "u_karim" });
     expect(res.status).toBe(400);
   });
 
   it("calcule les indicateurs du projet", async () => {
-    const stats = (await api("u_alice", "GET", `/api/projects/${projectId("Application mobile")}/stats`)).body;
+    const stats = (await api("u_alice", "GET", `/api/projects/${await projectId("Application mobile")}/stats`)).body;
     expect(stats.total).toBeGreaterThan(10);
     expect(stats.overdue).toBeGreaterThanOrEqual(2);
     expect(stats.burnup).toHaveLength(14);
@@ -90,7 +90,7 @@ describe("tâches", () => {
 
 describe("coéquipier IA", () => {
   it("assigner une tâche à Atlas lance un agent qui attend les validations", async () => {
-    const pid = projectId("Application mobile");
+    const pid = await projectId("Application mobile");
     const tasks = (await api("u_alice", "GET", `/api/projects/${pid}/tasks`)).body;
     const weekly = tasks.find((t: { title: string }) => t.title.startsWith("Point d'avancement"));
     await api("u_alice", "PATCH", `/api/tasks/${weekly.id}`, { assignee_id: "ai_atlas" });
@@ -117,15 +117,16 @@ describe("coéquipier IA", () => {
     expect(task.subtasks.length).toBe(3);
   });
 
-  it("l'IA ne voit pas les projets auxquels elle n'a pas accès", () => {
-    const hr = projectId("RH");
-    expect(() => ctx.ai.tools.execute("ai_atlas", "get_project", { project_id: hr })).toThrow(/n'a pas le droit/);
-    const res = ctx.ai.tools.execute("ai_atlas", "search_tasks", { text: "rémunération" }) as { count: number };
+  it("l'IA ne voit pas les projets auxquels elle n'a pas accès", async () => {
+    const hr = await projectId("RH");
+    const c = { actorId: "ai_atlas", orgId: await orgId() };
+    await expect(ctx.ai.tools.execute(c, "get_project", { project_id: hr })).rejects.toThrow(/n'a pas le droit/);
+    const res = await ctx.ai.tools.execute(c, "search_tasks", { text: "rémunération" }) as { count: number };
     expect(res.count).toBe(0);
   });
 
   it("une règle déclenche Nova à la création d'une tâche dans le Backlog", async () => {
-    const pid = projectId("Application mobile");
+    const pid = await projectId("Application mobile");
     const backlog = (await api("u_alice", "GET", `/api/projects/${pid}`)).body.sections.find((s: { name: string }) => s.name === "Backlog");
     const t = (await api("u_alice", "POST", "/api/tasks", { project_id: pid, title: "Bug : crash au lancement", section_id: backlog.id })).body;
     const runs = await waitFor(async () => (await api("u_alice", "GET", `/api/ai/runs?task_id=${t.id}`)).body as { agent_id: string; kind: string }[], (r) => r.length > 0);
@@ -133,7 +134,7 @@ describe("coéquipier IA", () => {
   });
 
   it("l'assistant agit avec les droits de l'utilisateur et demande validation avant d'écrire", async () => {
-    const pid = projectId("Application mobile");
+    const pid = await projectId("Application mobile");
     const { run_id } = (await api("u_karim", "POST", "/api/ai/chat", { project_id: pid, messages: [{ role: "user", content: "Crée une tâche Préparer la démo client" }] })).body;
     const [approval] = await waitFor(async () => (await api("u_karim", "GET", "/api/ai/approvals")).body as { id: string }[], (a) => a.length > 0);
     expect((await api("u_alice", "POST", `/api/ai/approvals/${approval.id}`, { approve: true })).status).toBe(403);
@@ -145,7 +146,7 @@ describe("coéquipier IA", () => {
   });
 
   it("propose des sous-tâches, un point d'avancement et des tâches extraites d'un texte", async () => {
-    const pid = projectId("Application mobile");
+    const pid = await projectId("Application mobile");
     const [task] = (await api("u_alice", "GET", `/api/projects/${pid}/tasks`)).body;
     expect((await api("u_alice", "POST", `/api/tasks/${task.id}/ai/subtasks`)).body.subtasks.length).toBeGreaterThan(2);
     const status = (await api("u_alice", "POST", `/api/projects/${pid}/ai/status`)).body;

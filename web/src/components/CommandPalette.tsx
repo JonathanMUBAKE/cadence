@@ -55,9 +55,9 @@ export function CommandPalette() {
             {results.tasks.map((t) => {
               const p = projectName(t.project_id);
               return (
-                <Command.Item key={t.id} value={`#${t.number} ${t.title}`} onSelect={() => run(() => { nav(`/projects/${t.project_id}?task=${t.id}`); })} className={item}>
+                <Command.Item key={t.id} value={`${t.key} ${t.title}`} onSelect={() => run(() => { nav(`/projects/${t.project_id}?task=${t.id}`); })} className={item}>
                   <CheckCircle2 className={t.completed ? "size-4 text-success" : "size-4 text-faint"} />
-                  <span className="flex-1 truncate">{t.title}</span>
+                  <span className="font-mono text-[12px] text-faint">{t.key}</span><span className="flex-1 truncate">{t.title}</span>
                   {p && <span className="flex items-center gap-1.5 text-[12px] text-faint"><ProjectIcon icon={p.icon} color={p.color} size={14} />{p.name}</span>}
                 </Command.Item>
               );

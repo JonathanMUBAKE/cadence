@@ -6,17 +6,35 @@ export interface User {
   id: string; name: string; email: string | null; title: string | null; avatar_color: string;
   is_ai: boolean; ai_role: string | null; ai_instructions: string | null;
 }
+export type OrgRole = "owner" | "admin" | "member" | "guest";
+export interface Organization { id: string; name: string; slug: string; domains: string[]; role: OrgRole }
+export interface Me extends User { org_id: string; orgs: Organization[] }
+export interface OrgUser extends User { org_role: OrgRole; unit_id: string | null }
+export interface OrgUnit {
+  id: string; org_id: string; parent_id: string | null; name: string; kind: string; manager_id: string | null;
+  position: number; depth: number; member_count: number; team_count: number;
+}
+export type TeamVisibility = "public" | "request" | "private";
+export interface Team {
+  id: string; org_id: string; unit_id: string | null; name: string; description: string; visibility: TeamVisibility; color: string;
+  member_count: number; project_count: number; my_role: "lead" | "member" | null; request_pending: boolean;
+}
+export interface TeamDetail extends Team {
+  members: { user_id: string; role: "lead" | "member" }[];
+  projects: ProjectSummary[];
+  requests: { id: string; user_id: string; created_at: string }[];
+}
 export interface Section { id: string; project_id: string; name: string; position: number }
 export interface ProjectSummary {
-  id: string; name: string; description: string; color: string; icon: string; status: ProjectStatus;
+  id: string; key: string; team_id: string | null; team_name: string | null; access: "team" | "private"; name: string; description: string; color: string; icon: string; status: ProjectStatus;
   due_on: string | null; owner_id: string | null; created_at: string; role: Role;
   task_count: number; done_count: number; overdue_count: number; members: string[];
 }
 export interface ProjectDetail extends Omit<ProjectSummary, "task_count" | "done_count" | "overdue_count" | "members"> {
-  sections: Section[]; members: { user_id: string; role: Role }[]; archived: boolean;
+  sections: Section[]; members: { user_id: string; role: Role; source: "explicit" | "team" }[]; archived: boolean;
 }
 export interface Task {
-  id: string; number: number; project_id: string; section_id: string | null; parent_id: string | null;
+  id: string; number: number; key: string; project_id: string; section_id: string | null; parent_id: string | null;
   title: string; description: string; assignee_id: string | null; creator_id: string | null; priority: Priority;
   start_on: string | null; due_on: string | null; completed: boolean; completed_at: string | null; position: number;
   tags: string[]; created_at: string; updated_at: string; subtask_count?: number; subtask_done?: number; comment_count?: number;
@@ -25,8 +43,8 @@ export interface Comment { id: string; task_id: string; author_id: string; body:
 export interface Activity { id: string; project_id: string | null; task_id: string | null; actor_id: string; kind: string; data: Record<string, unknown>; created_at: string }
 export interface TaskDetail extends Task {
   role: Role;
-  project: { id: string; name: string; color: string; icon: string; description: string };
-  section: Section | null; parent: { id: string; number: number; title: string } | null;
+  project: { id: string; name: string; color: string; icon: string; description: string; key: string; org_id: string };
+  section: Section | null; parent: { id: string; number: number; key: string; title: string } | null;
   subtasks: Task[]; comments: Comment[]; activity: Activity[];
 }
 export interface Notification {

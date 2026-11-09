@@ -236,11 +236,11 @@ export function Markdown({ text, className }: { text: string; className?: string
   const blocks: ReactNode[] = [];
   let list: string[] = [];
   const inline = (s: string, k: string | number) => {
-    const parts = s.split(/(\*\*[^*]+\*\*|`[^`]+`|#\d+|@\p{L}+)/gu);
+    const parts = s.split(/(\*\*[^*]+\*\*|`[^`]+`|\b[A-Z][A-Z0-9]{1,9}-\d+\b|#\d+|@\p{L}+)/gu);
     return <span key={k}>{parts.map((p, i) => {
       if (/^\*\*.+\*\*$/.test(p)) return <strong key={i}>{p.slice(2, -2)}</strong>;
       if (/^`.+`$/.test(p)) return <code key={i}>{p.slice(1, -1)}</code>;
-      if (/^#\d+$/.test(p)) return <span key={i} className="font-mono text-[0.92em] text-ai-fg">{p}</span>;
+      if (/^(#\d+|[A-Z][A-Z0-9]{1,9}-\d+)$/.test(p)) return <span key={i} className="font-mono text-[0.92em] text-ai-fg">{p}</span>;
       if (/^@\p{L}+$/u.test(p)) return <span key={i} className="rounded bg-info-soft px-0.5 font-medium text-info">{p}</span>;
       return p;
     })}</span>;
