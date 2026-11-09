@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowRight, Pencil, Plus, Trash2, Zap } from "lucide-react";
-import { Avatar, Button, Dialog, Empty, IconButton, cn } from "@/components/ui";
+import { Avatar, Button, ConfirmDialog, Dialog, Empty, IconButton, cn } from "@/components/ui";
 import { RUN_STATUS, RunTimeline } from "@/components/ai";
 import { useAgents, useRules, useRuns, useUserMap } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
@@ -24,6 +24,7 @@ export function AutomationsView({ project }: ViewProps) {
   const shell = useShell();
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<AiRule> | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const isAdmin = project.role === "admin";
   const save = async (r: Partial<AiRule>) => {
@@ -63,7 +64,9 @@ export function AutomationsView({ project }: ViewProps) {
                       <input type="checkbox" checked={r.enabled} onChange={(e) => save({ ...r, enabled: e.target.checked })} className="accent-[var(--ai)]" />Active
                     </label>
                     <IconButton label="Modifier" onClick={() => setEditing(r)}><Pencil className="size-3.5" /></IconButton>
-                    <IconButton label="Supprimer" onClick={() => api.del(`/api/projects/${project.id}/ai/rules/${r.id}`).then(() => qc.invalidateQueries({ queryKey: ["rules", project.id] }))}><Trash2 className="size-3.5" /></IconButton>
+                    <IconButton label="Supprimer" onClick={() => setDeleting(r.id)}><Trash2 className="size-3.5" /></IconButton>
+                    <ConfirmDialog open={deleting === r.id} onOpenChange={(v) => !v && setDeleting(null)} title="Supprimer cette règle ?" confirmLabel="Supprimer la règle" description={`La règle « ${r.name} » ne se déclenchera plus.`}
+                      onConfirm={() => api.del(`/api/projects/${project.id}/ai/rules/${r.id}`).then(() => qc.invalidateQueries({ queryKey: ["rules", project.id] }), (e) => toast.error(e.message))} />
                   </div>
                 )}
               </div>

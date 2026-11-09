@@ -234,6 +234,18 @@ export function Dialog({ open, onOpenChange, title, description, children, width
   );
 }
 
+/** Demande de confirmation avant une action qu'on ne peut pas annuler. */
+export function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel, onConfirm }: {
+  open: boolean; onOpenChange: (v: boolean) => void; title: ReactNode; description: ReactNode; confirmLabel: string; onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title={title} width={440}
+      footer={<><Button onClick={() => onOpenChange(false)}>Annuler</Button><Button variant="danger" onClick={() => { onOpenChange(false); onConfirm(); }}>{confirmLabel}</Button></>}>
+      <p className="text-[13.5px] text-muted">{description}</p>
+    </Dialog>
+  );
+}
+
 export const TooltipProvider = TT.Provider;
 export function Tip({ label, children, side = "top" }: { label: ReactNode; children: ReactNode; side?: "top" | "bottom" | "left" | "right" }) {
   return (

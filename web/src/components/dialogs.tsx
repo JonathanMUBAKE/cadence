@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Flag, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { FileUp, Flag, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ImportProjectDialog } from "./ImportProject";
 import { Avatar, Button, Dialog, PROJECT_ICONS, ProjectIcon, cn } from "./ui";
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker } from "./pickers";
 import { AiBadge } from "./ai";
@@ -31,6 +32,7 @@ export function NewProjectDialog() {
   const [template, setTemplate] = useState("kanban");
   const [due, setDue] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const { data: teams } = useTeams();
   const { data: me } = useMe();
   const orgAdmin = ["owner", "admin"].includes(me?.orgs.find((o) => o.id === me.org_id)?.role ?? "");
@@ -59,8 +61,10 @@ export function NewProjectDialog() {
     } catch (e) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
   return (
+    <>
+    <ImportProjectDialog open={importing} onOpenChange={setImporting} />
     <Dialog open={shell.newProject} onOpenChange={shell.setNewProject} title="Nouveau projet" description="Vous en serez administrateur. Ajoutez ensuite vos coéquipiers, humains et IA."
-      footer={<><Button onClick={() => shell.setNewProject(false)}>Annuler</Button><Button variant="primary" disabled={!name.trim()} loading={saving} onClick={submit}>Créer le projet</Button></>}>
+      footer={<><Button variant="ai" className="mr-auto" icon={<FileUp className="size-3.5" />} onClick={() => { shell.setNewProject(false); setImporting(true); }}>Importer un fichier</Button><Button onClick={() => shell.setNewProject(false)}>Annuler</Button><Button variant="primary" disabled={!name.trim()} loading={saving} onClick={submit}>Créer le projet</Button></>}>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <ProjectIcon icon={icon} color={color} size={40} />
@@ -106,6 +110,7 @@ export function NewProjectDialog() {
         </div>
       </div>
     </Dialog>
+    </>
   );
 }
 

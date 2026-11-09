@@ -66,5 +66,5 @@ describe("secrets", () => {
       const res = await ctx.app.inject({ method: "GET", url: "/api/me", headers: { cookie: `cadence_uid=${encodeURIComponent(forged)}` } });
       expect(res.statusCode).toBe(401);
     } finally { await ctx.app.close(); }
-  });
+  }, 30_000); // Ce test crée sa base lui-même : hors d'un beforeEach, il n'a par défaut que 5 secondes
 });

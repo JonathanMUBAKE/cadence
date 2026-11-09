@@ -11,6 +11,9 @@ import { AiEngine } from "./ai/engine.js";
 import { AnthropicProvider, MODEL, type AiProvider } from "./ai/provider.js";
 import { DemoProvider } from "./ai/demo.js";
 import { seedIfEmpty } from "./seed.js";
+import { ATTACHMENT_MAX_BYTES, Attachments } from "./attachments.js";
+import { Importer } from "./ai/importer.js";
+import { IMPORT_MAX_BYTES } from "./documents/extract.js";
 import { cookieSecret } from "./secrets.js";
 
 export interface AppOptions {
@@ -35,15 +38,18 @@ export async function buildApp(opts: AppOptions = {}) {
   const detach = ai.attach();
   const mail = new MailService(db, svc, bus);
   const detachMail = mail.attach();
+  const attachments = new Attachments(svc);
+  const importer = new Importer(svc, provider);
 
   const app = Fastify({ logger: opts.logger ?? false });
   await app.register(cookie, { secret: cookieSecret() });
   app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
     if (err instanceof z.ZodError) return reply.status(400).send({ error: "Requête invalide", details: err.issues });
     const e = err as { statusCode?: number; message: string; code?: string };
+    if (e.code === "FST_ERR_CTP_BODY_TOO_LARGE") return reply.status(413).send({ error: `Fichier trop volumineux : ${req.url.startsWith("/api/import") ? 10 : 25} Mo au maximum` });
     if (e.code === "23505") return reply.status(409).send({ error: "Cet élément existe déjà" });
     if (e.statusCode && e.statusCode < 500) return reply.status(e.statusCode).send({ error: e.message });
     app.log.error(err);
@@ -84,7 +90,7 @@ export async function buildApp(opts: AppOptions = {}) {
     const Role = z.enum(["viewer", "commenter", "editor", "admin"]);
 
     r.get("/api/me", async (req) => ({ ...(await svc.user(me(req))), org_id: org(req), orgs: await svc.orgsOf(me(req)) }));
-    r.get("/api/users", async (req) => svc.usersOf(org(req)));
+    r.get("/api/users", async (req) => svc.visibleUsers(me(req), org(req)));
 
     // ---------------------------------------------------------------- photos de profil
     r.put<{ Params: { id: string } }>("/api/users/:id/avatar", { bodyLimit: 1024 * 1024 }, async (req) =>
@@ -209,6 +215,38 @@ export async function buildApp(opts: AppOptions = {}) {
     r.post<{ Params: { id: string } }>("/api/tasks/:id/comments", async (req) => svc.addComment(me(req), req.params.id, z.object({ body: z.string().min(1).max(10000) }).parse(req.body).body));
     r.patch<{ Params: { id: string } }>("/api/comments/:id", async (req) => svc.updateComment(me(req), req.params.id, z.object({ body: z.string().min(1).max(10000) }).parse(req.body).body));
     r.delete<{ Params: { id: string } }>("/api/comments/:id", async (req) => { await svc.deleteComment(me(req), req.params.id); return { ok: true }; });
+
+    // ---------------------------------------------------------------- fichiers : envoi brut, le nom passe dans l'adresse
+    r.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+    const fileBody = (req: FastifyRequest) => (req.body instanceof Buffer ? req.body : Buffer.alloc(0));
+    const fileName = (req: FastifyRequest) => z.object({ name: z.string().min(1).max(500) }).parse(req.query).name;
+
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/attachments", { bodyLimit: ATTACHMENT_MAX_BYTES }, async (req) => attachments.add(me(req), req.params.id, fileName(req), fileBody(req)));
+    r.get<{ Params: { id: string } }>("/api/attachments/:id", async (req, reply) => {
+      const a = await attachments.file(me(req), req.params.id);
+      // Seuls les images et les PDF s'affichent dans la page : le reste se télécharge, pour qu'aucun fichier ne s'exécute sur Cadence
+      const pdf = a.mime === "application/pdf";
+      const inline = (req.query as { inline?: string }).inline === "1" && (pdf || a.mime.startsWith("image/"));
+      return reply.header("Content-Type", a.mime).header("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(a.filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`)
+        // Le bac à sable empêcherait le lecteur PDF du navigateur de s'ouvrir
+        .header("X-Content-Type-Options", "nosniff").header("Content-Security-Policy", inline && pdf ? "frame-ancestors 'self'" : "sandbox").header("Cache-Control", "private, no-store").send(a.data);
+    });
+    r.get<{ Params: { id: string } }>("/api/attachments/:id/preview", async (req) => attachments.preview(me(req), req.params.id));
+    r.post<{ Params: { id: string } }>("/api/comments/:id/attachments", { bodyLimit: ATTACHMENT_MAX_BYTES }, async (req) => attachments.addToComment(me(req), req.params.id, fileName(req), fileBody(req)));
+    r.delete<{ Params: { id: string } }>("/api/attachments/:id", async (req) => { await attachments.remove(me(req), req.params.id); return { ok: true }; });
+
+    // ---------------------------------------------------------------- import d'un projet depuis un fichier
+    const importDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable();
+    const ImportBody = z.object({
+      name: z.string().trim().min(1).max(120), description: z.string().max(5000).optional(), due_on: importDate.optional(), team_id: z.string().nullable().optional(),
+      access: z.enum(["team", "private"]).optional(), filename: z.string().max(500), sections: z.array(z.string().trim().min(1).max(80)).min(1).max(20),
+      tasks: z.array(z.object({
+        title: z.string().trim().min(1).max(300), description: z.string().max(20000), section: z.string().max(80), assignee_id: z.string().nullable(), due_on: importDate, priority: Priority, completed: z.boolean(),
+        subtasks: z.array(z.object({ title: z.string().trim().min(1).max(300), assignee_id: z.string().nullable(), due_on: importDate })).max(30),
+      })).max(300),
+    });
+    r.post("/api/import/analyze", { bodyLimit: IMPORT_MAX_BYTES }, async (req) => importer.analyze(me(req), org(req), fileName(req), fileBody(req)));
+    r.post("/api/import/create", async (req) => importer.create(me(req), org(req), ImportBody.parse(req.body)));
 
     // ---------------------------------------------------------------- boîte de réception & recherche
     r.get("/api/notifications", async (req) => svc.listNotifications(me(req), org(req)));

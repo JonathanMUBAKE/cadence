@@ -3,12 +3,13 @@ import { AnimatePresence, motion } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  ArrowUpRight, CalendarDays, ChevronRight, Copy, CornerDownLeft, Ellipsis, Flag, Hash, LayoutGrid, ListChecks, Plus, Send, Sparkles,
+  ArrowUpRight, CalendarDays, ChevronRight, Copy, CornerDownLeft, Ellipsis, Flag, Hash, LayoutGrid, ListChecks, Paperclip, Plus, Send, Sparkles,
   Tag, Trash2, User as UserIcon, Wand2, X, History, MessageSquare, CalendarClock, CopyPlus, FolderInput, Pencil,
 } from "lucide-react";
-import { Avatar, Button, Checkbox, Chip, IconButton, Markdown, Menu, MenuContent, MenuItem, MenuSeparator, MenuSub, MenuTrigger, ProjectIcon, Spinner, cn } from "./ui";
+import { Avatar, Button, Checkbox, Chip, ConfirmDialog, IconButton, Markdown, Menu, MenuContent, MenuItem, MenuSeparator, MenuSub, MenuTrigger, ProjectIcon, Spinner, cn } from "./ui";
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker, SectionPicker } from "./pickers";
 import { AiBadge, RUN_STATUS, RunTimeline, isActive } from "./ai";
+import { ATTACHMENT_MAX_BYTES, AttachmentRow, Attachments, formatSize } from "./Attachments";
 import { useAgents, useCreateTask, useDeleteTask, useMe, useProject, useProjects, useRuns, useTask, useUpdateTask, useUserMap } from "@/lib/hooks";
 import { ago, dueLabel, shortDate } from "@/lib/format";
 import { api } from "@/lib/api";
@@ -18,7 +19,8 @@ export function TaskDrawer({ taskId, onClose, onOpenTask }: { taskId: string | n
   useEffect(() => {
     if (!taskId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || document.querySelector("[data-radix-popper-content-wrapper]")) return;
+      // Un menu ou un aperçu ouvert au-dessus du panneau se ferme d'abord
+      if (e.key !== "Escape" || document.querySelector("[data-radix-popper-content-wrapper], [role='dialog'][data-state='open']")) return;
       const el = document.activeElement as HTMLElement | null;
       // Premier Échap : on quitte le champ en cours de saisie sans perdre le brouillon
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable)) { el.blur(); return; }
@@ -51,7 +53,10 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
   const users = useUserMap();
   const { data: projects } = useProjects();
   const qc = useQueryClient();
+  const { data: me } = useMe();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const canEdit = t?.role === "editor" || t?.role === "admin";
+  const canRemove = t?.role === "admin" || (canEdit && t?.creator_id === me?.id);
   const save = (patch: Partial<Task>) => t && update.mutate({ id: t.id, ...patch });
 
   if (isLoading) return <div className="flex flex-1 items-center justify-center"><Spinner /></div>;
@@ -76,7 +81,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
                   try { const c = await api.post<Task>(`/api/tasks/${t.id}/duplicate`, { subtasks: true }); qc.invalidateQueries({ queryKey: ["tasks"] }); toast.success("Tâche dupliquée"); onOpenTask(c.id); }
                   catch (e) { toast.error((e as Error).message); }
                 }}>Dupliquer avec les sous-tâches</MenuItem>
-                {!t.parent_id && (
+                {!t.parent_id && canRemove && (
                   <MenuSub label="Déplacer vers un projet" icon={<FolderInput className="size-3.5" />}>
                     {(projects ?? []).filter((p) => p.id !== t.project_id && (p.role === "editor" || p.role === "admin")).map((p) => (
                       <MenuItem key={p.id} icon={<ProjectIcon icon={p.icon} color={p.color} size={16} />} onSelect={async () => {
@@ -89,11 +94,14 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
                     ))}
                   </MenuSub>
                 )}
-                <MenuSeparator />
-                <MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => del.mutate(t.id, { onSuccess: () => { toast.success("Tâche supprimée"); onClose(); } })}>Supprimer la tâche</MenuItem>
+                {canRemove && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => setConfirmingDelete(true)}>Supprimer la tâche</MenuItem></>}
               </MenuContent>
             </Menu>
           )}
+          <ConfirmDialog open={confirmingDelete} onOpenChange={setConfirmingDelete} title="Supprimer cette tâche ?" confirmLabel="Supprimer la tâche"
+            description={`« ${t.title} » sera supprimée définitivement, avec ses sous-tâches, ses commentaires et ses pièces jointes.`}
+            onConfirm={() => del.mutate(t.id, { onSuccess: () => { toast.success("Tâche supprimée"); onClose(); } })} />
+
           <IconButton label="Fermer" onClick={onClose}><X className="size-4" /></IconButton>
         </div>
       </header>
@@ -164,6 +172,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
           </section>
 
           <Subtasks t={t} canEdit={canEdit} memberIds={memberIds} onOpenTask={onOpenTask} />
+          <Attachments t={t} />
           <Conversation t={t} canComment={t.role !== "viewer"} memberIds={memberIds} />
         </div>
       </div>
@@ -390,6 +399,8 @@ const ACTIVITY_LABEL: Record<string, (d: Record<string, unknown>) => string> = {
   "task.description": () => "a modifié la description",
   "task.tags": () => "a modifié les étiquettes",
   "task.start_on": () => "a changé la date de début",
+  "attachment.added": (d) => `a joint « ${d.filename} »`,
+  "attachment.removed": (d) => `a retiré « ${d.filename} »`,
   "ai.approved": (d) => `a autorisé : ${d.summary}`,
   "ai.rejected": (d) => `a refusé : ${d.summary}`,
 };
@@ -410,7 +421,7 @@ function Conversation({ t, canComment, memberIds }: { t: TaskDetail; canComment:
       {tab === "comments" ? (
         <div className="space-y-4">
           {t.comments.length === 0 && <p className="text-[13px] text-faint">Pas encore de commentaire. Écrivez @Atlas ou @Nova pour solliciter un coéquipier IA.</p>}
-          {t.comments.map((c) => <CommentItem key={c.id} c={c} taskId={t.id} isAdmin={t.role === "admin"} />)}
+          {t.comments.map((c) => <CommentItem key={c.id} c={c} taskId={t.id} isAdmin={t.role === "admin"} attachments={t.attachments.filter((a) => a.comment_id === c.id)} />)}
           {canComment && <Composer taskId={t.id} memberIds={memberIds} />}
         </div>
       ) : (
@@ -428,11 +439,12 @@ function Conversation({ t, canComment, memberIds }: { t: TaskDetail; canComment:
   );
 }
 
-function CommentItem({ c, taskId, isAdmin }: { c: TaskDetail["comments"][number]; taskId: string; isAdmin: boolean }) {
+function CommentItem({ c, taskId, isAdmin, attachments }: { c: TaskDetail["comments"][number]; taskId: string; isAdmin: boolean; attachments: TaskDetail["attachments"] }) {
   const users = useUserMap();
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [v, setV] = useState(c.body);
   const a = users.get(c.author_id);
   const mine = me?.id === c.author_id;
@@ -454,7 +466,9 @@ function CommentItem({ c, taskId, isAdmin }: { c: TaskDetail["comments"][number]
           {(mine || isAdmin) && !editing && (
             <span className="ml-auto flex gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               {mine && <IconButton size="sm" label="Modifier le commentaire" onClick={() => { setV(c.body); setEditing(true); }}><Pencil className="size-3.5" /></IconButton>}
-              <IconButton size="sm" label="Supprimer le commentaire" onClick={remove}><Trash2 className="size-3.5" /></IconButton>
+              <IconButton size="sm" label="Supprimer le commentaire" onClick={() => setConfirming(true)}><Trash2 className="size-3.5" /></IconButton>
+              <ConfirmDialog open={confirming} onOpenChange={setConfirming} title="Supprimer ce commentaire ?" confirmLabel="Supprimer" onConfirm={remove}
+                description={attachments.length ? "Le commentaire et ses pièces jointes seront supprimés définitivement." : "Le commentaire sera supprimé définitivement."} />
             </span>
           )}
         </div>
@@ -470,6 +484,7 @@ function CommentItem({ c, taskId, isAdmin }: { c: TaskDetail["comments"][number]
         ) : (
           <div className={cn("mt-1 text-[13.5px] leading-relaxed", a?.is_ai && "rounded-xl border border-ai-line/60 bg-ai-soft/40 px-3 py-2")}><Markdown text={c.body} /></div>
         )}
+        {attachments.length > 0 && <ul className="mt-1 divide-y divide-line rounded-lg border border-line">{attachments.map((x) => <AttachmentRow key={x.id} a={x} taskId={taskId} isAdmin={isAdmin} />)}</ul>}
       </div>
     </div>
   );
@@ -480,15 +495,31 @@ function Composer({ taskId, memberIds }: { taskId: string; memberIds: string[] }
   const qc = useQueryClient();
   const [v, setV] = useState("");
   const [sending, setSending] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const mention = v.match(/@(\p{L}*)$/u);
   const options = mention ? memberIds.map((id) => users.get(id)!).filter((u) => u && u.id !== "ai_cadence" && u.name.toLowerCase().startsWith(mention[1].toLowerCase())).slice(0, 6) : [];
   const insert = (name: string) => { setV(v.replace(/@(\p{L}*)$/u, `@${name.split(" ")[0]} `)); ref.current?.focus(); };
+  const pick = (list: File[]) => {
+    const tooBig = list.filter((f) => f.size > ATTACHMENT_MAX_BYTES);
+    for (const f of tooBig) toast.error(`« ${f.name} » dépasse 25 Mo`);
+    setFiles([...files, ...list.filter((f) => f.size <= ATTACHMENT_MAX_BYTES)]);
+    if (fileInput.current) fileInput.current.value = "";
+  };
   const send = async () => {
-    if (!v.trim()) return;
+    if (!v.trim() && !files.length) return;
     setSending(true);
-    try { await api.post(`/api/tasks/${taskId}/comments`, { body: v }); setV(""); qc.invalidateQueries({ queryKey: ["task", taskId] }); }
-    catch (e) { toast.error((e as Error).message); } finally { setSending(false); }
+    try {
+      // Le texte part d'abord : le commentaire existe même si un fichier est refusé
+      const c = await api.post<{ id: string }>(`/api/tasks/${taskId}/comments`, { body: v.trim() || `Pièce jointe : ${files.map((f) => f.name).join(", ")}`.slice(0, 9000) });
+      setV(""); setFiles([]);
+      for (const file of files) {
+        try { await api.upload(`/api/comments/${c.id}/attachments`, file); }
+        catch (e) { toast.error(`« ${file.name} » : ${(e as Error).message}`); }
+      }
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+    } catch (e) { toast.error((e as Error).message); } finally { setSending(false); }
   };
   useEffect(() => { const el = ref.current; if (el) { el.style.height = "0px"; el.style.height = Math.min(220, Math.max(44, el.scrollHeight)) + "px"; } }, [v]);
   return (
@@ -505,9 +536,18 @@ function Composer({ taskId, memberIds }: { taskId: string; memberIds: string[] }
       <textarea ref={ref} value={v} onChange={(e) => setV(e.target.value)} placeholder="Écrire un commentaire… (@ pour mentionner)"
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }}
         className="block w-full resize-none bg-transparent px-3 pt-2.5 text-[13.5px] outline-none placeholder:text-faint" />
+      {files.length > 0 && (
+        <ul className="flex flex-wrap gap-1 px-2.5 pb-1">
+          {files.map((f, i) => <li key={`${f.name}${i}`}><Chip>{f.name} · {formatSize(f.size)}<button aria-label={`Retirer ${f.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))} className="ml-0.5"><X className="size-3" /></button></Chip></li>)}
+        </ul>
+      )}
       <div className="flex items-center justify-between px-2 pb-2">
-        <span className="flex items-center gap-1 pl-1 text-[11.5px] text-faint"><Hash className="size-3" />⌘ Entrée pour envoyer</span>
-        <Button size="sm" variant="primary" disabled={!v.trim()} loading={sending} icon={<Send className="size-3.5" />} onClick={send}>Envoyer</Button>
+        <span className="flex items-center gap-1 pl-1 text-[11.5px] text-faint">
+          <IconButton size="sm" label="Joindre un fichier au commentaire" onClick={() => fileInput.current?.click()}><Paperclip className="size-3.5" /></IconButton>
+          <input ref={fileInput} type="file" multiple hidden aria-label="Fichiers du commentaire" onChange={(e) => pick([...(e.target.files ?? [])])} />
+          <Hash className="size-3" />⌘ Entrée pour envoyer
+        </span>
+        <Button size="sm" variant="primary" disabled={!v.trim() && !files.length} loading={sending} icon={<Send className="size-3.5" />} onClick={send}>Envoyer</Button>
       </div>
     </div>
   );

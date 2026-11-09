@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import type { Section } from "@/lib/types";
 
 /** Actions sur une section : renommer, déplacer, supprimer. `axis` adapte les libellés (colonnes ou liste). */
-export function SectionMenu({ section, sections, axis = "horizontal", taskCount }: { section: Section; sections: Section[]; axis?: "horizontal" | "vertical"; taskCount: number }) {
+export function SectionMenu({ section, sections, axis = "horizontal", taskCount, canDelete }: { section: Section; sections: Section[]; axis?: "horizontal" | "vertical"; taskCount: number; canDelete: boolean }) {
   const qc = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -27,7 +27,7 @@ export function SectionMenu({ section, sections, axis = "horizontal", taskCount 
           <MenuItem icon={<Pencil className="size-3.5" />} onSelect={() => { setName(section.name); setRenaming(true); }}>Renommer</MenuItem>
           {i > 0 && <MenuItem icon={<ArrowLeft className={axis === "vertical" ? "size-3.5 rotate-90" : "size-3.5"} />} onSelect={() => call(api.post(`/api/sections/${section.id}/move`, { direction: "left" }))}>{prev}</MenuItem>}
           {i < sections.length - 1 && <MenuItem icon={<ArrowRight className={axis === "vertical" ? "size-3.5 rotate-90" : "size-3.5"} />} onSelect={() => call(api.post(`/api/sections/${section.id}/move`, { direction: "right" }))}>{next}</MenuItem>}
-          {sections.length > 1 && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => setDeleting(true)}>Supprimer la section</MenuItem></>}
+          {canDelete && sections.length > 1 && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => setDeleting(true)}>Supprimer la section</MenuItem></>}
         </MenuContent>
       </Menu>
 

@@ -59,7 +59,7 @@ const ORG_RANK: Record<OrgRole, number> = { guest: 1, member: 2, admin: 3, owner
 /** Date du calendrier local au format AAAA-MM-JJ : « aujourd'hui » suit l'heure de l'installation, pas UTC. */
 export const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 export const today = () => localDate();
-const isRealDate = (v: string) => { const t = Date.parse(`${v}T00:00:00Z`); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v; };
+export const isRealDate = (v: string) => { const t = Date.parse(`${v}T00:00:00Z`); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v; };
 const assertDates = (...values: (string | null | undefined)[]) => { for (const v of values) if (v && !isRealDate(v)) throw badRequest(`Date invalide : ${v}`); };
 /** Reconnaît @Prénom sans s'arrêter aux lettres accentuées, que \b ne connaît pas. */
 export const mentionPattern = (name: string, prefix = "@") => new RegExp(`${prefix}${name.split(" ")[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu");
@@ -144,6 +144,15 @@ export class Services {
   async usersOf(orgId: string): Promise<OrgUser[]> {
     return (await this.db.query<Row>(`SELECT u.*, om.role AS org_role, om.unit_id FROM users u JOIN org_members om ON om.user_id = u.id
       WHERE om.org_id = $1 ORDER BY u.is_ai, u.name`, [orgId])).map((u) => withAvatar(u) as unknown as OrgUser);
+  }
+
+  /** Annuaire visible par une personne : un invité ne connaît que les personnes de ses projets. */
+  async visibleUsers(actorId: string, orgId: string): Promise<OrgUser[]> {
+    const all = await this.usersOf(orgId);
+    if ((await this.orgRole(actorId, orgId)) !== "guest") return all;
+    const seen = new Set([actorId]);
+    for (const projectId of await this.readableProjectIds(actorId, orgId, true)) for (const m of await this.members(projectId)) seen.add(m.user_id);
+    return all.filter((u) => seen.has(u.id));
   }
 
   // ================================================================ photos de profil
@@ -316,6 +325,7 @@ export class Services {
     if (c!.kids || c!.teams || c!.people) throw badRequest(`Entité non vide : ${c!.kids} sous-entité(s), ${c!.teams} équipe(s), ${c!.people} personne(s) rattachée(s)`);
     if (!u.parent_id) throw badRequest("L'entité racine ne peut pas être supprimée");
     await this.db.query("DELETE FROM org_units WHERE id = $1", [unitId]);
+    await this.log(actorId, "unit.deleted", { orgId: u.org_id, data: { name: u.name } });
     this.bus.emit({ type: "org.changed", actorId, orgId: u.org_id });
   }
   async setMemberUnit(actorId: string, orgId: string, userId: string, unitId: string | null) {
@@ -389,9 +399,11 @@ export class Services {
     const orgRole = await this.orgRole(userId, t.org_id);
     if (!orgRole) throw badRequest("La personne doit d'abord être membre de l'organisation");
     if (orgRole === "guest") throw badRequest("Un invité ne peut pas rejoindre une équipe : ajoutez-le directement aux projets");
-    if (role === null) {
+    if (role !== "lead" && (await this.teamRole(userId, teamId)) === "lead") {
       const leads = await this.db.one<{ n: number }>("SELECT count(*)::int AS n FROM team_members WHERE team_id = $1 AND role = 'lead' AND user_id <> $2", [teamId, userId]);
-      if ((await this.teamRole(userId, teamId)) === "lead" && !leads?.n) throw badRequest("L'équipe doit garder au moins un responsable");
+      if (!leads?.n) throw badRequest("L'équipe doit garder au moins un responsable");
+    }
+    if (role === null) {
       await this.db.query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2", [teamId, userId]);
     } else {
       await this.db.query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,$3) ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role", [teamId, userId, role]);
@@ -527,6 +539,7 @@ export class Services {
   async updateProject(actorId: string, projectId: string, patch: Partial<Pick<Project, "name" | "description" | "color" | "icon" | "status" | "due_on" | "archived" | "team_id" | "access">>) {
     const role = await this.require(actorId, projectId, "editor");
     if ((patch.team_id !== undefined || patch.access !== undefined) && role !== "admin") throw forbidden("Seuls les administrateurs du projet changent son équipe ou son accès");
+    if (patch.archived !== undefined && role !== "admin") throw forbidden("Seuls les administrateurs du projet peuvent l'archiver ou le restaurer");
     assertDates(patch.due_on);
     const p = await this.projectRow(projectId);
     if (patch.team_id) { const t = await this.teamRow(patch.team_id); if (t.org_id !== p.org_id) throw badRequest("Équipe invalide"); }
@@ -535,6 +548,7 @@ export class Services {
     for (const k of allowed) if (patch[k] !== undefined) { vals.push(patch[k]); sets.push(`${k} = $${vals.length}`); }
     if (sets.length) { vals.push(projectId); await this.db.query(`UPDATE projects SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals); }
     if (patch.status) await this.log(actorId, "project.status", { projectId, data: { status: patch.status } });
+    if (patch.archived !== undefined && patch.archived !== p.archived) await this.log(actorId, patch.archived ? "project.archived" : "project.restored", { projectId, data: { name: p.name } });
     this.bus.emit({ type: "project.changed", actorId, projectId });
     return this.getProject(actorId, projectId);
   }
@@ -617,13 +631,14 @@ export class Services {
   }
   async deleteSection(actorId: string, sectionId: string) {
     const s = await this.sectionRow(sectionId);
-    await this.require(actorId, s.project_id, "editor");
+    await this.require(actorId, s.project_id, "admin");
     const fallback = await this.db.one<{ id: string }>("SELECT id FROM sections WHERE project_id = $1 AND id <> $2 ORDER BY position LIMIT 1", [s.project_id, sectionId]);
     if (!fallback) throw badRequest("Un projet doit garder au moins une section");
     await this.db.tx(async (q) => {
       await q.query("UPDATE tasks SET section_id = $1 WHERE section_id = $2", [fallback.id, sectionId]);
       await q.query("DELETE FROM sections WHERE id = $1", [sectionId]);
     });
+    await this.log(actorId, "section.deleted", { projectId: s.project_id, data: { name: s.name } });
     this.bus.emit({ type: "project.changed", actorId, projectId: s.project_id });
   }
 
@@ -689,6 +704,7 @@ export class Services {
       parent: parent ? { id: parent.id, number: parent.number, key: parent.key, title: parent.title } : null,
       subtasks: await this.listTasks(actorId, { project_id: task.project_id, parent_id: task.id }),
       comments: await this.db.query<Comment>("SELECT * FROM comments WHERE task_id = $1 ORDER BY created_at", [task.id]),
+      attachments: await this.db.query<{ id: string; comment_id: string | null; filename: string; mime: string; size: number }>("SELECT id, task_id, comment_id, uploader_id, filename, mime, size, created_at FROM attachments WHERE task_id = $1 ORDER BY created_at", [task.id]),
       activity: await this.db.query<Activity>("SELECT * FROM activity WHERE task_id = $1 ORDER BY created_at DESC LIMIT 50", [task.id]),
     };
   }
@@ -700,7 +716,7 @@ export class Services {
     return Number(r[0]?.m ?? 0) + 1024;
   }
 
-  async createTask(actorId: string, input: TaskInput): Promise<Task> {
+  async createTask(actorId: string, input: TaskInput, opts: { silent?: boolean } = {}): Promise<Task> {
     const title = input.title?.trim();
     if (!title) throw badRequest("Le titre est obligatoire");
     await this.require(actorId, input.project_id, "editor");
@@ -730,7 +746,7 @@ export class Services {
     });
     const task = await this.taskRow(id);
     await this.log(actorId, "task.created", { projectId: task.project_id, taskId: id, data: { title, parent_id: task.parent_id } });
-    if (task.assignee_id && task.assignee_id !== actorId) await this.notifyAssigned(actorId, task);
+    if (task.assignee_id && task.assignee_id !== actorId && !opts.silent) await this.notifyAssigned(actorId, task);
     this.bus.emit({ type: "task.created", actorId, projectId: task.project_id, taskId: id });
     return task;
   }
@@ -815,7 +831,7 @@ export class Services {
   async moveTaskToProject(actorId: string, ref: string, projectId: string): Promise<Task> {
     const t = await this.taskRow(await this.resolveTaskId(actorId, ref));
     if (t.parent_id) throw badRequest("Une sous-tâche se déplace avec sa tâche parente");
-    await this.require(actorId, t.project_id, "editor");
+    this.assertCanRemoveTask(actorId, t, await this.require(actorId, t.project_id, "editor"));
     await this.require(actorId, projectId, "editor");
     if (t.project_id === projectId) return t;
     const [src, dst] = [await this.projectRow(t.project_id), await this.projectRow(projectId)];
@@ -839,9 +855,14 @@ export class Services {
     return this.taskRow(t.id);
   }
 
+  /** Faire disparaître une tâche d'un projet est réservé à son auteur et aux administrateurs du projet. */
+  private assertCanRemoveTask(actorId: string, task: Task, role: Role) {
+    if (role !== "admin" && task.creator_id !== actorId) throw forbidden("Seuls l'auteur de la tâche et les administrateurs du projet peuvent la supprimer ou la sortir du projet");
+  }
+
   async deleteTask(actorId: string, ref: string) {
     const task = await this.taskRow(await this.resolveTaskId(actorId, ref));
-    await this.require(actorId, task.project_id, "editor");
+    this.assertCanRemoveTask(actorId, task, await this.require(actorId, task.project_id, "editor"));
     await this.db.query("DELETE FROM tasks WHERE id = $1", [task.id]);
     await this.log(actorId, "task.deleted", { projectId: task.project_id, data: { title: task.title, key: task.key } });
     this.bus.emit({ type: "task.deleted", actorId, projectId: task.project_id, taskId: task.id });

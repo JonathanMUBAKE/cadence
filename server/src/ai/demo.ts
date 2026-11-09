@@ -6,6 +6,7 @@
 import type { AiProvider, ContentBlock, JsonRequest, Msg, ToolResultBlock, TurnRequest, TurnResult } from "./provider.js";
 import type { Services } from "../services.js";
 import { localDate, mentionPattern, today } from "../services.js";
+import type { RawImport } from "./importer.js";
 
 type Parsed = { name: string; input: Record<string, unknown>; ok: boolean; out: unknown };
 
@@ -32,6 +33,54 @@ function rounds(messages: Msg[]): Parsed[][] {
   return out;
 }
 
+const READ_WORDS = /pi[èe]ce jointe|fichier|document|\blis\b|\blire\b/i;
+const importPriority = (s: string) => (/urgent|critique/i.test(s) ? "urgent" : /haut|élev|high/i.test(s) ? "high" : /moyen|normal|medium/i.test(s) ? "medium" : /bas|faible|low/i.test(s) ? "low" : "none");
+const importDate = (s: string) => { const fr = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return fr ? `${fr[3]}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}` : /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null; };
+
+/** Sans modèle : lit un tableau avec en-têtes, ou un plan fait de titres et de puces. */
+function demoImport(text: string, fallback: string): RawImport {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("## Feuille :"));
+  const rows = lines.filter((l) => /[|;\t]/.test(l)).map((l) => l.split(/\s*[|;\t]\s*/).map((c) => c.trim()));
+  const header = rows[0]?.map((h) => h.toLowerCase()) ?? [];
+  const col = (re: RegExp, not?: RegExp) => header.findIndex((h) => re.test(h) && !not?.test(h));
+  const title = col(/t[âa]che|titre|action|libell|intitul/, /parent/);
+  return title >= 0 && rows.length > 1 ? demoFromTable(rows.slice(1), title, col, fallback) : demoFromOutline(lines, fallback);
+}
+
+function demoFromTable(rows: string[][], title: number, col: (re: RegExp, not?: RegExp) => number, fallback: string): RawImport {
+  const [who, due, prio, state, parent] = [col(/responsable|assign|porteur|qui/), col(/[ée]ch[ée]ance|date|deadline/), col(/priorit/), col(/statut|[ée]tat|section|phase|colonne/), col(/parent/)];
+  const at = (r: string[], i: number) => (i >= 0 ? r[i] ?? "" : "");
+  const tasks: RawImport["tasks"] = [];
+  for (const r of rows.filter((x) => at(x, title) && !at(x, parent))) {
+    const status = at(r, state);
+    tasks.push({ title: at(r, title), description: "", section: status || null, assignee: at(r, who) || null, due_on: importDate(at(r, due)), priority: importPriority(at(r, prio)), completed: /termin|fait|done|clos/i.test(status), subtasks: [] });
+  }
+  for (const r of rows.filter((x) => at(x, title) && at(x, parent))) {
+    const sub = { title: at(r, title), assignee: at(r, who) || null, due_on: importDate(at(r, due)) };
+    const owner = tasks.find((t) => t.title === at(r, parent));
+    if (owner) owner.subtasks.push(sub);
+    else tasks.push({ ...sub, description: "", section: at(r, state) || null, priority: importPriority(at(r, prio)), completed: false, subtasks: [] });
+  }
+  return { name: fallback, description: "", due_on: null, sections: [...new Set(tasks.map((t) => t.section).filter((s): s is string => !!s))], tasks, notes: ["Mode démo : colonnes reconnues d'après leur en-tête."] };
+}
+
+function demoFromOutline(lines: string[], fallback: string): RawImport {
+  const headings = lines.filter((l) => /^#+\s/.test(l)).length;
+  let name = "", description = "", section: string | null = null;
+  const sections: string[] = [];
+  const tasks: RawImport["tasks"] = [];
+  const add = (t: string) => tasks.push({ title: t, description: "", section, assignee: null, due_on: null, priority: "none", completed: false, subtasks: [] });
+  for (const line of lines) {
+    const h = line.match(/^(#+)\s+(.*)$/), item = line.match(/^(\s*)[-•*]\s+(.*)$/);
+    if (h) { if (!name && h[1].length === 1 && headings > 1) name = h[2]; else { section = h[2]; sections.push(section); } }
+    else if (item) { if (item[1].length && tasks.length) tasks[tasks.length - 1].subtasks.push({ title: item[2], assignee: null, due_on: null }); else add(item[2]); }
+    else if (!tasks.length && !section && !description) description = line.trim();
+    else add(line.trim());
+  }
+  if (!tasks.length && description) { add(description); description = ""; } // Un texte d'une seule ligne reste une tâche
+  return { name: name || fallback, description, due_on: null, sections, tasks, notes: ["Mode démo : plan déduit des titres et des puces du document."] };
+}
+
 const daysLate = (d: string) => Math.round((Date.parse(today()) - Date.parse(d)) / 86400000);
 const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
 
@@ -56,10 +105,20 @@ export class DemoProvider implements AiProvider {
     return this.assistant(req, r);
   }
 
+  // ------------------------------------------------------------ lecture d'une pièce jointe
+  private readFile(req: TurnRequest, r: Parsed[][], attachmentId: string): Promise<TurnResult> | TurnResult {
+    if (r.length === 0) return this.tools(call("read_attachment", { attachment_id: attachmentId }));
+    const p = r[0][0];
+    if (!p.ok || typeof p.out !== "object") return this.say(`Je n'ai pas pu lire ce fichier : ${String(p.out).replace(/^Erreur : /, "")}`, req);
+    const out = p.out as { filename: string; content: string; total_chars: number };
+    return this.say(`J'ai lu « ${out.filename} » (${out.total_chars} caractères).\n\nDébut du document :\n${out.content.slice(0, 400)}`, req);
+  }
+
   // ------------------------------------------------------------ coéquipier assigné
   private async teammate(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
     const { taskId, projectId } = req.hint;
     const task = taskId ? await this.svc.getTask(req.hint.actorId, taskId) : null;
+    if (task?.attachments[0] && READ_WORDS.test(`${task.title} ${task.description}`)) return this.readFile(req, r, task.attachments[0].id);
     if (r.length === 0) {
       return this.tools(call("get_task", { task: task?.key }), call("search_tasks", { project_id: projectId, overdue: true, limit: 10 }));
     }
@@ -98,6 +157,8 @@ export class DemoProvider implements AiProvider {
   // ------------------------------------------------------------ @mention dans un commentaire
   private async mention(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
     const task = req.hint.taskId ? await this.svc.getTask(req.hint.actorId, req.hint.taskId) : null;
+    const asked = String(req.messages[0]?.content ?? "").match(/mentionné dans ce commentaire :\n« ([\s\S]*) »/)?.[1] ?? "";
+    if (task?.attachments[0] && READ_WORDS.test(asked)) return this.readFile(req, r, task.attachments[0].id);
     if (r.length === 0 && task) return this.tools(call("get_task", { task: task.key }));
     if (!task) return this.say("Je n'ai pas trouvé la tâche concernée.", req);
     const done = task.subtasks.filter((s) => s.completed).length;
@@ -202,6 +263,8 @@ export class DemoProvider implements AiProvider {
         const title = String(d.title ?? "");
         return { description: `**Objectif**\n${title}.\n\n**Contexte**\n${String(d.description || "À préciser.")}\n\n**Critères de réussite**\n- Le livrable est validé par le responsable du projet\n- Les personnes concernées sont informées\n\n**Points d'attention**\n- Vérifier les dépendances avant de commencer` } as T;
       }
+      case "import":
+        return demoImport(String(d.text ?? ""), String(d.name ?? "Projet importé")) as T;
       default:
         throw new Error(`Action IA inconnue : ${req.hint.kind}`);
     }

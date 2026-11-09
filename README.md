@@ -8,9 +8,9 @@ Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asa
 **Gestion de projet**
 - Projets avec statut, échéance, couleur et icône, sections personnalisables et modèles (Kanban, développement produit, lancement…)
 - Six vues par projet : **Liste**, **Tableau** Kanban en glisser-déposer, **Calendrier**, **Chronologie** (Gantt), **Tableau de bord** (indicateurs, courbe de progression, charge par personne, priorités) et **Automatisations**
-- Tâches complètes : responsable, échéance, priorité, étiquettes, sous-tâches, description, commentaires avec @mentions, historique
+- Tâches complètes : responsable, échéance, priorité, étiquettes, sous-tâches, description, commentaires avec @mentions, historique, **pièces jointes** sur la tâche et les commentaires (25 Mo par fichier, type réel contrôlé, droits de la tâche), avec aperçu intégré (images, PDF, Word, Excel, CSV, texte) et lecture par les coéquipiers IA
 - Accueil personnalisé, page « Mes tâches » groupée par échéance, boîte de réception (mentions, assignations, validations)
-- Membres et rôles par projet : lecteur, commentateur, éditeur, administrateur. Les droits sont appliqués côté serveur.
+- Membres et rôles par projet : lecteur, commentateur, éditeur, administrateur. Les droits sont appliqués côté serveur. Supprimer une tâche ou la sortir du projet est réservé à son auteur et aux administrateurs ; supprimer une section et archiver un projet, aux administrateurs.
 - Temps réel (Server-Sent Events) : tout se met à jour sans recharger la page
 - Palette de commandes (⌘K), thème clair/sombre, interface entièrement utilisable sur mobile
 
@@ -25,7 +25,8 @@ Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asa
   - suggérer des sous-tâches ;
   - réécrire une description ;
   - rédiger un point d'avancement de projet ;
-  - transformer des notes en vrac en tâches, avec relecture avant création.
+  - transformer des notes en vrac en tâches, avec relecture avant création ;
+  - **importer un projet** depuis un fichier Word, Excel (formats récents et anciens), PDF, CSV ou texte : l'IA propose le projet, ses sections, tâches et sous-tâches, et rien n'est créé avant la relecture.
 - **Mémoire** rattachée aux projets, et **journal** complet de chaque intervention.
 
 **Organisation du travail** (inspirée d'Asana, Jira, Confluence et Microsoft Project)
@@ -96,7 +97,7 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 ## Tests
 
 ```bash
-npm test          # 72 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
+npm test          # 111 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 

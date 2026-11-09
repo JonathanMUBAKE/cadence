@@ -56,7 +56,7 @@ export function ProjectPage() {
       {project.archived && (
         <div className="flex flex-wrap items-center gap-3 border-b border-line bg-warning-soft px-4 py-2.5 text-[13px] text-warning sm:px-8">
           <Archive className="size-4" /><span className="flex-1">Ce projet est archivé : il n'apparaît plus dans la barre latérale ni dans les recherches.</span>
-          {canEdit && <Button size="sm" onClick={() => patch({ archived: false }).then(() => toast.success("Projet restauré"))}>Restaurer</Button>}
+          {project.role === "admin" && <Button size="sm" onClick={() => patch({ archived: false }).then(() => toast.success("Projet restauré"))}>Restaurer</Button>}
         </div>
       )}
       <header className="border-b border-line px-4 pt-5 sm:px-8 sm:pt-7">
@@ -89,7 +89,7 @@ export function ProjectPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Members project={project} />
             <ProjectMenu project={project} />
-            <Button variant="ai" icon={<Sparkles className="size-3.5" />} onClick={() => setStatusOpen(true)}>Point d'avancement</Button>
+            {canEdit && <Button variant="ai" icon={<Sparkles className="size-3.5" />} onClick={() => setStatusOpen(true)}>Point d'avancement</Button>}
             {canEdit && <Button variant="ai" icon={<Wand2 className="size-3.5" />} onClick={() => shell.openQuickAdd(project.id)} className="hidden sm:inline-flex">Notes → tâches</Button>}
             {canEdit && <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={addTask}>Tâche</Button>}
           </div>
@@ -121,8 +121,7 @@ function ProjectMenu({ project }: { project: ProjectDetail }) {
   const nav = useNavigate();
   const [deleting, setDeleting] = useState(false);
   const [confirm, setConfirm] = useState("");
-  const canEdit = project.role === "editor" || project.role === "admin";
-  if (!canEdit) return null;
+  if (project.role !== "admin") return null;
   const refresh = () => { qc.invalidateQueries({ queryKey: ["projects"] }); qc.invalidateQueries({ queryKey: ["project", project.id] }); };
   const archive = () => api.patch(`/api/projects/${project.id}`, { archived: !project.archived })
     .then(() => { refresh(); toast.success(project.archived ? "Projet restauré" : "Projet archivé"); if (!project.archived) nav("/"); }, (e) => toast.error(e.message));
@@ -134,7 +133,7 @@ function ProjectMenu({ project }: { project: ProjectDetail }) {
         <MenuTrigger asChild><IconButton label="Actions du projet"><Ellipsis className="size-4" /></IconButton></MenuTrigger>
         <MenuContent align="end">
           <MenuItem icon={<Archive className="size-3.5" />} onSelect={archive}>{project.archived ? "Restaurer le projet" : "Archiver le projet"}</MenuItem>
-          {project.role === "admin" && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => { setConfirm(""); setDeleting(true); }}>Supprimer le projet</MenuItem></>}
+          <MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => { setConfirm(""); setDeleting(true); }}>Supprimer le projet</MenuItem>
         </MenuContent>
       </Menu>
       <Dialog open={deleting} onOpenChange={setDeleting} title="Supprimer définitivement le projet ?" width={480}

@@ -35,7 +35,7 @@ export function ListView({ project, tasks, aiActive, canEdit }: ViewProps) {
                 <span className="text-[13.5px] font-semibold">{s.name}</span>
               </button>
               <span className="text-[12px] tabular text-faint">{items.length}</span>
-              {canEdit && <span className="ml-auto opacity-60 transition-opacity group-hover:opacity-100"><SectionMenu section={s} sections={project.sections} axis="vertical" taskCount={tasks.filter((t) => t.section_id === s.id).length} /></span>}
+              {canEdit && <span className="ml-auto opacity-60 transition-opacity group-hover:opacity-100"><SectionMenu section={s} sections={project.sections} axis="vertical" taskCount={tasks.filter((t) => t.section_id === s.id).length} canDelete={project.role === "admin"} /></span>}
             </div>
             {!collapsed[s.id] && (
               <div className="sm:px-4">

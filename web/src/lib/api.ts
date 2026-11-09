@@ -15,7 +15,18 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return data as T;
 }
 
+/** Envoi d'un fichier brut : le nom passe dans l'adresse, le corps reste binaire. */
+async function upload<T>(url: string, file: File): Promise<T> {
+  const res = await fetch(`${url}?name=${encodeURIComponent(file.name)}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/octet-stream" }, body: file });
+  const text = await res.text();
+  let data: { error?: string } | null = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* réponse non JSON */ }
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`);
+  return data as T;
+}
+
 export const api = {
+  upload,
   get: <T>(url: string) => request<T>("GET", url),
   post: <T>(url: string, body: unknown = {}) => request<T>("POST", url, body),
   patch: <T>(url: string, body: unknown) => request<T>("PATCH", url, body),

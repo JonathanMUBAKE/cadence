@@ -53,8 +53,18 @@ export interface Task {
 }
 export interface Comment { id: string; task_id: string; author_id: string; body: string; ai_run_id: string | null; created_at: string; edited_at: string | null }
 export interface Activity { id: string; project_id: string | null; task_id: string | null; actor_id: string; kind: string; data: Record<string, unknown>; created_at: string }
+export interface Attachment { id: string; task_id: string; comment_id: string | null; uploader_id: string; filename: string; mime: string; size: number; created_at: string }
+export type AttachmentPreviewData =
+  | { kind: "image" | "pdf" | "none" }
+  | { kind: "document" | "text"; text: string; truncated: boolean }
+  | { kind: "sheets"; sheets: { name: string; rows: string[][] }[]; truncated: boolean };
+export interface ImportSubtask { title: string; assignee_id: string | null; due_on: string | null }
+export interface ImportTask { title: string; description: string; section: string; assignee_id: string | null; due_on: string | null; priority: Priority; completed: boolean; subtasks: ImportSubtask[] }
+export interface ImportProposal { name: string; description: string; due_on: string | null; sections: string[]; tasks: ImportTask[]; notes: string[] }
+export interface ImportAnalysis { filename: string; truncated: boolean; proposal: ImportProposal }
 export interface TaskDetail extends Task {
   role: Role;
+  attachments: Attachment[];
   project: { id: string; name: string; color: string; icon: string; description: string; key: string; org_id: string };
   section: Section | null; parent: { id: string; number: number; key: string; title: string } | null;
   subtasks: Task[]; comments: Comment[]; activity: Activity[];

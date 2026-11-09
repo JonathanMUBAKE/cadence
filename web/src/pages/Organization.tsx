@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AtSign, ChevronRight, Network, Plus, Trash2, Users } from "lucide-react";
-import { Avatar, Button, Empty, Spinner, cn } from "@/components/ui";
+import { Avatar, Button, ConfirmDialog, Empty, Spinner, cn } from "@/components/ui";
 import { AssigneePicker } from "@/components/pickers";
 import { AvatarUpload } from "@/components/AvatarUpload";
 import { OrgMail } from "./OrgMail";
@@ -95,6 +95,7 @@ function UnitDetail({ unit, units, isAdmin, onSelect }: { unit: OrgUnit; units: 
   const { data: teams } = useTeams();
   const [name, setName] = useState(unit.name);
   const [child, setChild] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const humans = (people ?? []).filter((u) => !u.is_ai);
   const refresh = () => { qc.invalidateQueries({ queryKey: ["units"] }); qc.invalidateQueries({ queryKey: ["users"] }); };
   const patch = (body: Record<string, unknown>, ok?: string) => api.patch(`/api/units/${unit.id}`, body).then(() => { refresh(); if (ok) toast.success(ok); }, (e) => toast.error(e.message));
@@ -167,10 +168,11 @@ function UnitDetail({ unit, units, isAdmin, onSelect }: { unit: OrgUnit; units: 
       </Block>
 
       {isAdmin && unit.parent_id && (
-        <Button variant="danger" size="sm" icon={<Trash2 className="size-3.5" />}
-          onClick={() => api.del(`/api/units/${unit.id}`).then(() => { refresh(); onSelect(unit.parent_id!); toast.success("Entité supprimée"); }, (e) => toast.error(e.message))}>
-          Supprimer l'entité
-        </Button>
+        <>
+          <Button variant="danger" size="sm" icon={<Trash2 className="size-3.5" />} onClick={() => setConfirmingDelete(true)}>Supprimer l'entité</Button>
+          <ConfirmDialog open={confirmingDelete} onOpenChange={setConfirmingDelete} title={`Supprimer « ${unit.name} » ?`} confirmLabel="Supprimer l'entité" description="Seule une entité vide peut être supprimée : ni sous-entité, ni équipe, ni personne rattachée."
+            onConfirm={() => api.del(`/api/units/${unit.id}`).then(() => { refresh(); onSelect(unit.parent_id!); toast.success("Entité supprimée"); }, (e) => toast.error(e.message))} />
+        </>
       )}
     </aside>
   );

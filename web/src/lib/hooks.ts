@@ -136,8 +136,7 @@ export function useLiveUpdates(enabled: boolean) {
       keys.forEach((k) => pending.current.add(JSON.stringify(k)));
       if (timer.current == null) timer.current = window.setTimeout(flush, 120);
     };
-    const es = new EventSource("/api/events", { withCredentials: true });
-    es.onmessage = (m) => {
+    const onMessage = (m: MessageEvent<string>) => {
       const e = JSON.parse(m.data) as Live;
       if (e.type === "ai.delta") { deltaListeners.forEach((fn) => fn(e.runId!, e.delta!)); return; }
       if (e.type === "notification") return queue(["notifications"]);
@@ -151,6 +150,18 @@ export function useLiveUpdates(enabled: boolean) {
       if (e.projectId) queue(["project", e.projectId]);
       if (e.taskId) queue(["task", e.taskId]);
     };
-    return () => { es.close(); if (timer.current) clearTimeout(timer.current); };
+    let es: EventSource;
+    let everOpen = false;
+    let retry: number | undefined;
+    const connect = () => {
+      es = new EventSource("/api/events", { withCredentials: true });
+      es.onmessage = onMessage;
+      // Les événements émis pendant une coupure sont perdus : à la reconnexion, on relit tout ce qui est affiché
+      es.onopen = () => { if (everOpen) void qc.invalidateQueries(); everOpen = true; };
+      // Le navigateur relance seul après une coupure réseau, mais abandonne sur une réponse d'erreur (proxy, redémarrage)
+      es.onerror = () => { if (es.readyState === EventSource.CLOSED) retry = window.setTimeout(connect, 3000); };
+    };
+    connect();
+    return () => { es.close(); if (retry) clearTimeout(retry); if (timer.current) clearTimeout(timer.current); };
   }, [enabled, qc]);
 }

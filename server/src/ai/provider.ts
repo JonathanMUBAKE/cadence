@@ -24,7 +24,7 @@ export interface TurnRequest {
 }
 export interface TurnResult { stop_reason: string; content: ContentBlock[] }
 
-export interface JsonRequest { system: string; prompt: string; schema: Record<string, unknown>; hint: { kind: string; data: unknown } }
+export interface JsonRequest { system: string; prompt: string; schema: Record<string, unknown>; hint: { kind: string; data: unknown }; effort?: "low" | "medium" | "high"; signal?: AbortSignal }
 
 export interface AiProvider {
   name: "anthropic" | "demo";
@@ -69,12 +69,13 @@ export class AnthropicProvider implements AiProvider {
       max_tokens: 16000,
       system: req.system,
       messages: [{ role: "user", content: req.prompt }],
-      output_config: { effort: "low", format: { type: "json_schema", schema: req.schema } },
+      output_config: { effort: req.effort ?? "low", format: { type: "json_schema", schema: req.schema } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-    } as never);
+    } as never, { signal: req.signal });
     const m = msg as unknown as { stop_reason: string; content: ContentBlock[] };
     if (m.stop_reason === "refusal") throw new RefusalError("Le modèle a décliné cette demande.");
+    if (m.stop_reason === "max_tokens") throw new Error("La réponse du modèle a été tronquée : le contenu à traiter est trop long.");
     const text = m.content.find((b): b is TextBlock => b.type === "text")?.text ?? "";
     return JSON.parse(text) as T;
   }

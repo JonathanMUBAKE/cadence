@@ -8,7 +8,7 @@ import { STATUS, ago, priorityMeta } from "@/lib/format";
 import type { ProjectStatus } from "@/lib/types";
 import type { ViewProps } from "@/pages/Project";
 
-export function DashboardView({ project, onStatusUpdate }: ViewProps & { onStatusUpdate: () => void }) {
+export function DashboardView({ project, canEdit, onStatusUpdate }: ViewProps & { onStatusUpdate: () => void }) {
   const { data: s } = useStats(project.id);
   const { data: updates } = useProjectUpdates(project.id);
   const { data: activity } = useProjectActivity(project.id);
@@ -30,7 +30,7 @@ export function DashboardView({ project, onStatusUpdate }: ViewProps & { onStatu
         <Panel title="Progression sur 14 jours" hint="Tâches terminées cumulées, face au périmètre total">
           <Burnup data={s.burnup} />
         </Panel>
-        <Panel title="Dernier point d'avancement" action={<Button size="sm" variant="ai" icon={<Sparkles className="size-3.5" />} onClick={onStatusUpdate}>Générer</Button>}>
+        <Panel title="Dernier point d'avancement" action={canEdit ? <Button size="sm" variant="ai" icon={<Sparkles className="size-3.5" />} onClick={onStatusUpdate}>Générer</Button> : undefined}>
           {latest ? (
             <div>
               <div className="flex items-center gap-2">

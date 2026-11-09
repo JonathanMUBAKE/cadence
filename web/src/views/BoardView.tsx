@@ -88,7 +88,7 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
       <div className="flex h-full gap-3 overflow-x-auto px-4 py-5 sm:px-8">
         {project.sections.map((s) => (
           <Column key={s.id} id={s.id} name={s.name} count={cols[s.id]?.length ?? 0} done={(cols[s.id] ?? []).filter((id) => byId.get(id)?.completed).length}
-            menu={canEdit ? <SectionMenu section={s} sections={project.sections} taskCount={cols[s.id]?.length ?? 0} /> : undefined}>
+            menu={canEdit ? <SectionMenu section={s} sections={project.sections} taskCount={cols[s.id]?.length ?? 0} canDelete={project.role === "admin"} /> : undefined}>
             <SortableContext items={cols[s.id] ?? []} strategy={verticalListSortingStrategy}>
               {(cols[s.id] ?? []).map((id) => {
                 const t = byId.get(id);
