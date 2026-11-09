@@ -43,6 +43,25 @@ Prix publics annuels, par utilisateur et par mois :
 
 ---
 
+### 1.4 Comment les outils du marché organisent le travail (analyse du 9 novembre 2026)
+
+| Couche | Asana | Jira | Confluence | Microsoft |
+|---|---|---|---|---|
+| Locataire (identité, domaine, SSO, facturation) | Organisation (domaine) ou espace de travail | Organisation Atlassian + site | Organisation + site | Locataire Microsoft 365 + environnement Power Platform |
+| Conteneur de collaboration | Équipe (publique, sur demande, privée) → projet | Espace Jira (ex-« projet », renommé en 2025), clé `APP` | Espace et arbre de pages | Groupe 365 → plan Planner, ou site PWA (Project Online s'arrête le 30/09/2026) |
+| Objet de travail | Tâche (multi-projets) | Élément `APP-123` | Page | Tâche (moteur de planification) |
+| Configuration | Bibliothèque de champs de l'organisation | Schémas partagés (géré par l'entreprise) ou locaux (géré par l'équipe) | Droits d'espace et restrictions de page | Champs et pool de ressources d'entreprise |
+| Vue transversale | Portefeuilles, objectifs | Tableaux et requêtes | Recherche | Portefeuilles, pool de ressources |
+
+**Modèle retenu pour Cadence** (chantier P0) :
+- **Organisations** multiples : un compte peut être membre de plusieurs organisations, aux données étanches.
+- **Entités hiérarchiques** à profondeur libre : entreprise, filiale, direction, département, service, site. Chaque entité a un responsable, qui voit en lecture les projets de toute sa branche.
+- **Équipes** rattachées à une entité, de visibilité publique, sur demande ou privée.
+- **Projets** rattachés à une équipe, avec une clé (`APP-12`) et un accès « équipe » ou « privé ».
+- **Droits effectifs** : le plus élevé parmi le rôle d'organisation, l'adhésion explicite, l'appartenance à l'équipe, la supervision hiérarchique et la visibilité publique de l'équipe.
+
+**Base de données** : PostgreSQL. Supabase en production (connexion par `DATABASE_URL`) et PGlite (PostgreSQL embarqué) pour les tests et la démonstration, avec le même SQL et les mêmes migrations.
+
 ## 2. Catalogue fonctionnel et état de Cadence
 
 Légende de la colonne Cadence :
@@ -160,7 +179,7 @@ Asana propose Slack, Microsoft Teams, Zoom, Google Drive, OneDrive, Dropbox, Box
 
 ## 3. Architecture cible
 
-1. **Une organisation, une instance**. Le modèle `organizations` arrive en P1, mono-locataire d'abord. Le multi-locataire viendra en P7 avec Postgres.
+1. **Organisations multiples dès P0**, sur PostgreSQL. Chaque ligne de données porte son `org_id`, et chaque requête de service est bornée à l'organisation active.
 2. **Tout passe par les services**. Chaque action est exécutée au nom d'un acteur (humain, IA, compte de service, connecteur ou système). Les droits sont vérifiés et un événement est émis sur le bus. Le journal d'audit, le temps réel, les règles et les connecteurs s'abonnent au bus.
 3. **Journal d'audit en chaîne de hachage**. Chaque événement contient le hachage du précédent : une modification a posteriori est donc détectable. L'export se fait au format de l'API d'audit d'Asana (filtres `start_at`, `end_at`, `event_type`, `actor_*`, `resource_*`) pour être compatible avec un SIEM.
 4. **Secrets chiffrés par enveloppe**. Une clé de chiffrement par donnée, elle-même chiffrée par une clé maîtresse. La clé maîtresse vient d'un fournisseur de clés : clé locale, HashiCorp Vault Transit ou AWS KMS. C'est la base de l'EKM : révoquer la clé maîtresse rend les secrets illisibles.
@@ -178,13 +197,16 @@ Asana propose Slack, Microsoft Teams, Zoom, Google Drive, OneDrive, Dropbox, Box
 
 | Chantier | Contenu | Plan |
 |---|---|---|
+| **P0 · Fondations** | PostgreSQL (Supabase, PGlite), organisations multiples, entités hiérarchiques, équipes, clés de projet, droits effectifs en cascade | `docs/superpowers/plans/2026-11-09-p0-fondations-organisations.md` |
 | **P1 · Administration, audit et sécurité** | organisation, rôles d'administration, comptes et mots de passe, double authentification, sessions, liste IP, SSO OIDC et SAML, SCIM, journal d'audit chaîné et export SIEM, DLP, chiffrement par enveloppe et EKM, export, rétention, conservation légale, RGPD, annonces, console d'administration | `docs/superpowers/plans/2026-11-09-p1-administration-audit-securite.md` |
 | **P2 · Connecteurs** | cadre commun (courtier OAuth, coffre de jetons, file de tâches, webhooks, catalogue administrable), pièces jointes, messagerie, visioconférence, stockage, e-mail, calendrier | `docs/superpowers/plans/2026-11-09-p2-connecteurs.md` |
 | P3 · Parité travail | champs personnalisés et formules, dépendances et décalage automatique, multi-homing, jalons, tâches récurrentes, abonnés, « j'aime », modèles complets, note de projet, messages, équipes, invités, recherche avancée, modification en masse | à écrire au démarrage de P3 |
 | P4 · Automatisation | constructeur de règles avec branches et variables, bundles, formulaires publics avec branchement, workflow builder, déclencheur web entrant, quotas | à écrire |
 | P5 · Stratégie et ressources | portefeuilles, objectifs OKR, charge de travail et effort, planification de capacité, suivi du temps, tableaux de bord personnalisables, validations formelles, relecture d'épreuves | à écrire |
 | P6 · IA avancée | champs intelligents, crédits et quotas, gouvernance fine, agents agissant via les connecteurs, serveur MCP, évaluation de la qualité des agents | à écrire |
-| P7 · Plateforme | API publique et OAuth, webhooks sortants, PWA hors ligne et sécurité mobile, multilingue, Postgres et multi-locataire, résidence des données, observabilité, sauvegardes | à écrire |
+| P7 · Plateforme | API publique et OAuth, webhooks sortants, PWA hors ligne et sécurité mobile, multilingue, résidence des données, observabilité, sauvegardes | à écrire |
+| P8 · Documentation (façon Confluence) | espaces de documentation par équipe ou projet, arbre de pages, droits par page, liens vers les tâches, contexte pour l'IA | à écrire |
+| P9 · Planification avancée (façon Microsoft Project) | les 4 types de dépendances avec avance et retard, chemin critique, versions de référence, calendriers, pool de ressources | à écrire |
 
 Les chantiers sont livrés dans cet ordre, sauf décision contraire : la sécurité d'abord, car SSO, audit et chiffrement conditionnent les connecteurs, qui manipulent des jetons tiers.
 
