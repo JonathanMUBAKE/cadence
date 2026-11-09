@@ -34,11 +34,12 @@ const ADMIN_ONLY = (p: Permission) => p.startsWith("org.");
 const NOT_FOR_GUESTS = new Set<Permission>(["projects.create", "projects.import", "teams.create", "teams.join", "teams.manage"]);
 
 /** Droits des quatre profils créés avec chaque organisation : ils reproduisent les rôles historiques. */
-export const SYSTEM_PROFILES: { role: BaseRole; name: string; description: string; permissions: Permission[] }[] = [
+export const SYSTEM_PROFILES: { role: BaseRole; slug?: string; name: string; description: string; permissions: Permission[] }[] = [
   { role: "owner", name: "Propriétaire", description: "Tous les droits. Ce profil ne peut pas être modifié.", permissions: ALL_PERMISSIONS },
   { role: "admin", name: "Administrateur", description: "Administre l'organisation, ses personnes et ses projets.", permissions: ALL_PERMISSIONS },
   { role: "member", name: "Membre", description: "Travaille dans les équipes et les projets auxquels il a accès.", permissions: ALL_PERMISSIONS.filter((p) => !ADMIN_ONLY(p)) },
   { role: "guest", name: "Invité", description: "N'accède qu'aux projets partagés avec lui.", permissions: ALL_PERMISSIONS.filter((p) => !ADMIN_ONLY(p) && !NOT_FOR_GUESTS.has(p)) },
+  { role: "member", slug: "readonly", name: "Lecture seule", description: "Consulte ce qui lui est partagé, sans rien pouvoir modifier.", permissions: [] },
 ];
 
 /** Profil + exceptions individuelles : une exception l'emporte toujours sur le profil. */

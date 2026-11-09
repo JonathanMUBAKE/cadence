@@ -51,6 +51,7 @@ export function smtpError(e: unknown): string {
 
 export class MailService {
   private queue: Promise<unknown> = Promise.resolve();
+  private addressSync: Promise<unknown> = Promise.resolve();
   private detach: (() => void) | null = null;
   private closed = false;
 
@@ -58,12 +59,16 @@ export class MailService {
 
   /** Envoie un e-mail pour chaque notification d'une organisation qui l'a activé. */
   attach() {
-    this.detach = this.bus.on((e) => { if (e.type === "notification" && e.notificationId) this.enqueue(() => this.mailNotification(e)); });
+    this.detach = this.bus.on((e) => {
+      if (e.type === "notification" && e.notificationId) this.enqueue(() => this.mailNotification(e));
+      // Les adresses suivent l'organigramme ici, et non à la lecture : une lecture ne doit rien écrire
+      if (e.type === "org.changed") this.addressSync = this.addressSync.then(async () => { if (await this.stored(e.orgId)) await this.ensureAddresses(e.orgId); }).catch(() => undefined);
+    });
     return () => this.detach?.();
   }
   /** Attend la fin des envois en cours (fermeture propre, tests). */
   async idle() { await this.queue; }
-  async shutdown() { this.detach?.(); this.closed = true; await Promise.race([this.queue, new Promise((r) => setTimeout(r, 3000))]); }
+  async shutdown() { this.detach?.(); this.closed = true; await Promise.race([Promise.all([this.queue, this.addressSync]), new Promise((r) => setTimeout(r, 3000))]); }
 
   private enqueue(fn: () => Promise<unknown>) {
     this.queue = this.queue.then(() => (this.closed ? undefined : fn())).catch(() => undefined);
@@ -135,7 +140,7 @@ export class MailService {
   private async addresses(orgId: string): Promise<ServiceAddress[]> {
     const m = await this.stored(orgId);
     if (!m) return [];
-    await this.ensureAddresses(orgId);
+    await this.addressSync;
     return this.db.query<ServiceAddress>(`
       SELECT s.id, s.target_type, s.target_id, s.local_part, s.local_part || '@' || $2 AS address,
         COALESCE(u.name, t.name, o.name) AS name,

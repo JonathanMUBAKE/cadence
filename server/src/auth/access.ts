@@ -104,6 +104,7 @@ export class Access {
     if (!role) throw notFound("Cette personne n'est pas membre de l'organisation");
     const mine = await this.mine(actorId, orgId);
     if (mine.role !== "owner" && RANK[role] > RANK[mine.role]) throw forbidden("Vous ne pouvez pas modifier une personne de niveau supérieur au vôtre");
+    if (mine.role !== "owner" && role === "admin" && userId !== actorId) throw forbidden("Seul un propriétaire peut modifier un administrateur");
     return { role, mine };
   }
 

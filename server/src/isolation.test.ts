@@ -102,7 +102,7 @@ describe("R-01 : un rôle explicite plafonne les droits venus d'une équipe", ()
 
   it("rejoindre une équipe exige le droit teams.join", async () => {
     const { team } = await teamProject();
-    const p = (await api("u_alice", "POST", "/api/org/profiles", { name: "Lecture seule", base_role: "member", permissions: [] })).body;
+    const p = (await api("u_alice", "POST", "/api/org/profiles", { name: "Sans aucun droit", base_role: "member", permissions: [] })).body;
     await api("u_alice", "PUT", "/api/org/members/u_hugo/profile", { profile_id: p.id });
     const refused = await api("u_hugo", "POST", `/api/teams/${team.id}/join`);
     expect(refused.status).toBe(403);

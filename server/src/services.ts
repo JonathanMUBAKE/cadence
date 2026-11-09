@@ -66,6 +66,7 @@ const assertDates = (...values: (string | null | undefined)[]) => { for (const v
 /** Reconnaît @Prénom sans s'arrêter aux lettres accentuées, que \b ne connaît pas. */
 export const mentionPattern = (name: string, prefix = "@") => new RegExp(`${prefix}${name.split(" ")[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu");
 const KEY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
+const projectArchived = () => new HttpError(409, "Ce projet est archivé : restaurez-le pour le modifier");
 
 /**
  * Rôle effectif de $1 sur chaque projet de ses organisations. Un administrateur d'organisation
@@ -239,7 +240,7 @@ export class Services {
   }
   private async insertSystemProfiles(q: Queryable, orgId: string) {
     for (const p of SYSTEM_PROFILES) {
-      await q.query("INSERT INTO access_profiles (id, org_id, name, description, base_role, permissions, is_system) VALUES ($1,$2,$3,$4,$5,$6,TRUE) ON CONFLICT (id) DO NOTHING", [systemProfileId(orgId, p.role), orgId, p.name, p.description, p.role, JSON.stringify(p.permissions)]);
+      await q.query("INSERT INTO access_profiles (id, org_id, name, description, base_role, permissions, is_system) VALUES ($1,$2,$3,$4,$5,$6,TRUE) ON CONFLICT (id) DO NOTHING", [p.slug ? `prf_${p.slug}_${orgId}` : systemProfileId(orgId, p.role), orgId, p.name, p.description, p.role, JSON.stringify(p.permissions)]);
     }
   }
   /** Organisations créées avant les profils : chacun reçoit le profil correspondant à son rôle. */
@@ -278,7 +279,8 @@ export class Services {
     if (!current) throw notFound("Cette personne n'est pas membre de l'organisation");
     if (role === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut nommer un propriétaire");
     if (current === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut modifier ou retirer un propriétaire");
-    if (mine !== "owner" && ((role && ORG_RANK[role] > ORG_RANK[mine]) || (current && ORG_RANK[current] > ORG_RANK[mine]))) throw forbidden("Vous ne pouvez pas agir au-delà de votre propre niveau d'accès");
+    if (mine !== "owner" && ((role && ORG_RANK[role] > ORG_RANK[mine]) || ORG_RANK[current] > ORG_RANK[mine])) throw forbidden("Vous ne pouvez pas agir au-delà de votre propre niveau d'accès");
+    if (mine !== "owner" && current === "admin" && userId !== actorId) throw forbidden("Seul un propriétaire peut modifier ou retirer un administrateur");
     if (mine !== "owner" && role) {
       // Un rôle attribue le profil système correspondant : même règle que pour les profils
       const profile = await this.db.one<{ permissions: string[] }>("SELECT permissions FROM access_profiles WHERE id = $1", [systemProfileId(orgId, role)]);
@@ -499,14 +501,16 @@ export class Services {
   }
   /** Alias historique utilisé par l'IA et les routes. */
   role(userId: string, projectId: string) { return this.projectRole(userId, projectId); }
-  async require(actorId: string, projectId: string, min: Role = "viewer"): Promise<Role> {
-    const project = await this.db.one<{ name: string }>("SELECT name FROM projects WHERE id = $1", [projectId]);
+  /** Un projet archivé se lit mais ne s'écrit plus : seules sa restauration et sa suppression passent `allowArchived`. */
+  async require(actorId: string, projectId: string, min: Role = "viewer", opts: { allowArchived?: boolean } = {}): Promise<Role> {
+    const project = await this.db.one<{ name: string; archived: boolean }>("SELECT name, archived FROM projects WHERE id = $1", [projectId]);
     if (!project) throw notFound("Projet introuvable");
     const role = await this.projectRole(actorId, projectId);
     if (!role || ROLE_RANK[role] < ROLE_RANK[min]) {
       const verb = min === "viewer" ? "consulter" : min === "commenter" ? "commenter" : min === "editor" ? "modifier" : "administrer";
       throw forbidden(`${(await this.user(actorId)).name} n'a pas le droit de ${verb} le projet « ${project.name} »`);
     }
+    if (project.archived && min !== "viewer" && !opts.allowArchived) throw projectArchived();
     return role;
   }
   async readableProjectIds(actorId: string, orgId?: string | null, includeArchived = false): Promise<string[]> {
@@ -587,11 +591,12 @@ export class Services {
     return this.getProject(actorId, id);
   }
   async updateProject(actorId: string, projectId: string, patch: Partial<Pick<Project, "name" | "description" | "color" | "icon" | "status" | "due_on" | "archived" | "team_id" | "access">>) {
-    const role = await this.require(actorId, projectId, "editor");
+    const role = await this.require(actorId, projectId, "editor", { allowArchived: true });
     if ((patch.team_id !== undefined || patch.access !== undefined) && role !== "admin") throw forbidden("Seuls les administrateurs du projet changent son équipe ou son accès");
     if (patch.archived !== undefined && role !== "admin") throw forbidden("Seuls les administrateurs du projet peuvent l'archiver ou le restaurer");
     assertDates(patch.due_on);
     const p = await this.projectRow(projectId);
+    if (p.archived && Object.keys(patch).some((k) => k !== "archived")) throw projectArchived();
     if (patch.archived !== undefined) await this.requirePerm(actorId, p.org_id, "projects.archive");
     if (Object.keys(patch).some((k) => k !== "archived")) await this.requirePerm(actorId, p.org_id, "projects.edit");
     if (patch.team_id) { const t = await this.teamRow(patch.team_id); if (t.org_id !== p.org_id) throw badRequest("Équipe invalide"); }
@@ -622,7 +627,7 @@ export class Services {
     return this.members(projectId);
   }
   async deleteProject(actorId: string, projectId: string, confirm: string) {
-    await this.require(actorId, projectId, "admin");
+    await this.require(actorId, projectId, "admin", { allowArchived: true });
     await this.projectPerm(actorId, projectId, "projects.delete");
     const p = await this.projectRow(projectId);
     if (confirm.trim() !== p.name) throw badRequest("Saisissez le nom exact du projet pour confirmer la suppression");
@@ -869,7 +874,7 @@ export class Services {
   async moveTask(actorId: string, ref: string, to: { section_id: string; before_id?: string | null; after_id?: string | null }) {
     const task = await this.taskRow(await this.resolveTaskId(actorId, ref));
     await this.require(actorId, task.project_id, "editor");
-    const pos = async (id?: string | null) => (id ? (await this.db.one<{ position: number }>("SELECT position FROM tasks WHERE id = $1", [id]))?.position : undefined);
+    const pos = async (id?: string | null) => (id ? (await this.db.one<{ position: number }>("SELECT position FROM tasks WHERE id = $1 AND project_id = $2", [id, task.project_id]))?.position : undefined);
     const a = await pos(to.after_id), b = await pos(to.before_id);
     let position: number;
     if (a !== undefined && b !== undefined) position = (Number(a) + Number(b)) / 2;
@@ -975,6 +980,7 @@ export class Services {
   async updateComment(actorId: string, id: string, body: string): Promise<Comment> {
     const { c, task } = await this.commentRow(id);
     await this.require(actorId, task.project_id, "commenter");
+    await this.projectPerm(actorId, task.project_id, "tasks.comment");
     if (c.author_id !== actorId) throw forbidden("Seul l'auteur peut modifier ce commentaire");
     if (!body.trim()) throw badRequest("Le commentaire est vide");
     await this.db.query("UPDATE comments SET body = $1, edited_at = now() WHERE id = $2", [body.trim(), id]);
@@ -984,6 +990,7 @@ export class Services {
   async deleteComment(actorId: string, id: string) {
     const { c, task } = await this.commentRow(id);
     const role = await this.require(actorId, task.project_id, "commenter");
+    await this.projectPerm(actorId, task.project_id, "tasks.comment");
     if (c.author_id !== actorId && role !== "admin") throw forbidden("Seuls l'auteur et les administrateurs du projet peuvent supprimer ce commentaire");
     await this.db.query("DELETE FROM comments WHERE id = $1", [id]);
     await this.log(actorId, "comment.deleted", { projectId: task.project_id, taskId: task.id, data: { author: c.author_id } });

@@ -361,7 +361,7 @@ export async function buildApp(opts: AppOptions = {}) {
       id: z.string().optional(), name: z.string().min(1).max(120), trigger: z.enum(["task_created", "task_moved", "task_overdue"]), section_id: z.string().nullable().optional(),
       agent_id: z.string(), instructions: z.string().min(1).max(4000), auto_approve: z.boolean().optional(), enabled: z.boolean().optional(),
     }).parse(req.body), project_id: req.params.id }));
-    r.delete<{ Params: { id: string; ruleId: string } }>("/api/projects/:id/ai/rules/:ruleId", async (req) => { await ai.deleteRule(me(req), req.params.ruleId); return { ok: true }; });
+    r.delete<{ Params: { id: string; ruleId: string } }>("/api/projects/:id/ai/rules/:ruleId", async (req) => { await ai.deleteRule(me(req), req.params.ruleId, req.params.id); return { ok: true }; });
 
     // ---------------------------------------------------------------- temps réel (SSE)
     r.get("/api/events", (req, reply) => {

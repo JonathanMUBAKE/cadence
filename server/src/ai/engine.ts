@@ -22,6 +22,9 @@ export interface AiRule {
 }
 
 const MAX_ROUNDS = 12;
+const RULE_RUNS_PER_HOUR = 30;
+/** Une règle peut créer ou commenter seule ; modifier l'existant reste soumis à un humain, même si le contenu lu tente de l'y pousser. */
+const AUTO_APPROVABLE = new Set(["create_task", "add_comment", "remember"]);
 const LOCKED_INPUTS = new Set(["task", "project_id", "parent", "object_type", "object_id", "__run_id"]);
 /** Assez large pour une recherche complète ou une analyse : un JSON coupé est inexploitable. */
 const TOOL_RESULT_MAX = 24_000;
@@ -115,17 +118,25 @@ export class AiEngine {
     return (await this.svc.permissionsOf(actorId, await this.svc.orgOfProject(projectId))).includes("ai.delegate");
   }
 
+  /** Une règle agit au nom de sa créatrice : elle s'arrête si celle-ci perd le droit de déléguer, et ne peut pas s'emballer. */
+  private async ruleMayRun(r: AiRule) {
+    if (!r.created_by || !(await this.mayDelegate(r.created_by, r.project_id))) return false;
+    const recent = await this.svc.db.one<{ n: number }>("SELECT count(*)::int AS n FROM ai_runs WHERE rule_id = $1 AND created_at > now() - interval '1 hour'", [r.id]);
+    return (recent?.n ?? 0) < RULE_RUNS_PER_HOUR;
+  }
+
   private async fireRules(trigger: AiRule["trigger"], projectId: string, taskId: string, actorId: string) {
     const task = await this.svc.db.one<{ section_id: string | null; parent_id: string | null }>("SELECT section_id, parent_id FROM tasks WHERE id = $1", [taskId]);
     if (!task || task.parent_id) return;
     for (const r of (await this.listRulesRaw(projectId)).filter((x) => x.enabled && x.trigger === trigger)) {
-      if (r.section_id && r.section_id !== task.section_id) continue;
+      if ((r.section_id && r.section_id !== task.section_id) || !(await this.ruleMayRun(r))) continue;
       await this.start({ agentId: r.agent_id, kind: "rule", ruleId: r.id, taskId, projectId, requestedBy: actorId, instructions: r.instructions, autoApprove: r.auto_approve });
     }
   }
 
   async checkOverdueRules() {
     for (const r of await this.svc.db.query<AiRule>("SELECT * FROM ai_rules WHERE enabled AND trigger = 'task_overdue'")) {
+      if (!(await this.ruleMayRun(r))) continue;
       const tasks = await this.svc.db.query<{ id: string }>(
         `SELECT t.id FROM tasks t WHERE t.project_id = $1 AND NOT t.completed AND t.parent_id IS NULL AND t.due_on IS NOT NULL AND t.due_on < $2::date
          AND NOT EXISTS (SELECT 1 FROM ai_runs a WHERE a.rule_id = $3 AND a.task_id = t.id) LIMIT 5`, [r.project_id, today(), r.id]);
@@ -253,7 +264,7 @@ export class AiEngine {
         if (o.signal.aborted) throw new CancelledError();
         const input = (b.input && typeof b.input === "object" ? b.input : {}) as Record<string, unknown>;
         const stepId = await this.step(runId, { kind: "tool", tool: b.name, input, status: "running" });
-        if (WRITE_TOOL_NAMES.has(b.name) && !o.autoApprove) {
+        if (WRITE_TOOL_NAMES.has(b.name) && !(o.autoApprove && AUTO_APPROVABLE.has(b.name))) {
           const decision = await this.checkpoint(runId, o.ctx, o.approverIds, b.name, input, o.hint.projectId ?? null, o.hint.taskId ?? null, o.signal);
           if (!decision.ok) {
             await this.updateStep(stepId, "rejected", "Refusé par un humain");
@@ -440,8 +451,9 @@ export class AiEngine {
       [id, input.project_id, input.name, input.trigger, input.section_id ?? null, agent.id, input.instructions, !!input.auto_approve, input.enabled !== false, userId]);
     return this.getRule(id);
   }
-  async deleteRule(userId: string, ruleId: string) {
+  async deleteRule(userId: string, ruleId: string, projectId: string) {
     const r = await this.getRule(ruleId);
+    if (r.project_id !== projectId) throw notFound("Règle introuvable");
     await this.svc.require(userId, r.project_id, "admin");
     await this.svc.projectPerm(userId, r.project_id, "ai.rules");
     await this.svc.db.query("DELETE FROM ai_rules WHERE id = $1", [ruleId]);
