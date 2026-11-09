@@ -1,6 +1,6 @@
 import { uid } from "../db.js";
 import type { Bus, DomainEvent } from "../bus.js";
-import { badRequest, forbidden, localDate, notFound, today, type Services, type User } from "../services.js";
+import { HttpError, badRequest, forbidden, localDate, notFound, today, type Services, type User } from "../services.js";
 import { READ_TOOLS, WRITE_TOOLS, WRITE_TOOL_NAMES, ToolRunner, type ToolCtx } from "./tools.js";
 import { RefusalError, type AgentMode, type AiProvider, type Msg, type TextBlock, type ToolResultBlock, type ToolUseBlock } from "./provider.js";
 
@@ -41,8 +41,15 @@ export class AiEngine {
   /** Exécutions en cours de traitement (pour attendre la fin proprement, notamment en test). */
   readonly pending = new Set<Promise<unknown>>();
 
-  constructor(private svc: Services, private bus: Bus, public provider: AiProvider) {
+  constructor(private svc: Services, private bus: Bus, public provider: AiProvider, private runsPerHour = Number.POSITIVE_INFINITY) {
     this.tools = new ToolRunner(svc);
+  }
+
+  /** Chaque exécution consomme des appels payants : une organisation ne peut pas les enchaîner sans fin. */
+  private async assertQuota(orgId: string | null) {
+    if (!orgId) return;
+    const used = await this.svc.db.one<{ n: number }>("SELECT count(*)::int AS n FROM ai_runs WHERE org_id = $1 AND created_at > now() - interval '1 hour'", [orgId]);
+    if ((used?.n ?? 0) >= this.runsPerHour) throw new HttpError(429, `Quota IA de l'organisation atteint : ${this.runsPerHour} exécutions par heure. Réessayez plus tard.`);
   }
 
   /** Clôt proprement ce qu'un redémarrage a laissé en suspens. */
@@ -135,6 +142,7 @@ export class AiEngine {
       if (active) return null;
     }
     const orgId = o.projectId ? await this.svc.orgOfProject(o.projectId) : null;
+    await this.assertQuota(orgId);
     const id = uid("run");
     await this.svc.db.query(`INSERT INTO ai_runs (id, org_id, agent_id, kind, task_id, project_id, requested_by, rule_id, status, provider)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9)`, [id, orgId, o.agentId, o.kind, o.taskId ?? null, o.projectId ?? null, o.requestedBy ?? null, o.ruleId ?? null, this.provider.name]);
@@ -149,6 +157,7 @@ export class AiEngine {
     await this.svc.requireOrg(userId, orgId);
     await this.svc.requirePerm(userId, orgId, "ai.assistant");
     if (projectId) { await this.svc.require(userId, projectId); if ((await this.svc.orgOfProject(projectId)) !== orgId) throw badRequest("Projet hors de l'organisation active"); }
+    await this.assertQuota(orgId);
     const id = uid("run");
     await this.svc.db.query(`INSERT INTO ai_runs (id, org_id, agent_id, kind, project_id, requested_by, status, provider) VALUES ($1,$2,'ai_cadence','assistant',$3,$4,'queued',$5)`,
       [id, orgId, projectId, userId, this.provider.name]);

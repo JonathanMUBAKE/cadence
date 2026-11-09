@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { Importer } from "./ai/importer.js";
 import { IMPORT_MAX_BYTES } from "./documents/extract.js";
 import { cookieSecret, trustProxySetting } from "./secrets.js";
+import { DEFAULT_LIMITS, HOUR, MINUTE, RateLimiter, type Limits } from "./limits.js";
 
 export interface AppOptions {
   databaseUrl?: string; dataDir?: string; provider?: AiProvider | "auto" | "demo"; webDist?: string;
@@ -29,6 +30,7 @@ export interface AppOptions {
   demoLogin?: boolean;
   /** Adresse publique utilisée dans les liens envoyés par e-mail. */
   publicUrl?: string;
+  limits?: Partial<Limits>;
 }
 
 declare module "fastify" { interface FastifyRequest { userId: string; orgId: string; sessionId: string } }
@@ -42,7 +44,10 @@ export async function buildApp(opts: AppOptions = {}) {
   if (opts.seed !== false) await seedIfEmpty(svc);
   const provider: AiProvider = typeof opts.provider === "object" ? opts.provider
     : opts.provider === "demo" || !process.env.ANTHROPIC_API_KEY ? new DemoProvider(svc, opts.demoDelayMs) : new AnthropicProvider();
-  const ai = new AiEngine(svc, bus, provider);
+  const limits: Limits = { ...DEFAULT_LIMITS, ...opts.limits };
+  const limiter = new RateLimiter();
+  const tooMany = (reply: FastifyReply) => reply.status(429).send({ error: "Trop de requêtes. Réessayez dans un instant." });
+  const ai = new AiEngine(svc, bus, provider, limits.aiRunsPerHour);
   await ai.init();
   const detach = ai.attach();
   const mail = new MailService(db, svc, bus);
@@ -56,7 +61,7 @@ export async function buildApp(opts: AppOptions = {}) {
   const access = new Access(svc, authService);
   const provisioning = new Provisioning(svc, authService, access, opts.publicUrl);
 
-  const app = Fastify({ logger: opts.logger ?? false, trustProxy: trustProxySetting() });
+  const app = Fastify({ logger: opts.logger ?? false, trustProxy: trustProxySetting(), requestTimeout: 120_000 });
   await app.register(cookie, { secret: cookieSecret() });
   app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
@@ -82,6 +87,9 @@ export async function buildApp(opts: AppOptions = {}) {
     try { host = new URL(origin).host; } catch { /* origine illisible : refusée ci-dessous */ }
     if (host !== req.headers.host && !(host && allowedOrigins.has(host))) return reply.status(403).send({ error: "Origine non autorisée" });
   });
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.url.startsWith("/api/auth/") && !limiter.allow(`public:${req.ip}`, limits.anonymousPerMinute, MINUTE)) return tooMany(reply);
+  });
   const indexPath = opts.webDist ? join(opts.webDist, "index.html") : null;
   const inlineScripts = indexPath && existsSync(indexPath) ? [...readFileSync(indexPath, "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash("sha256").update(m[1].replace(/\r\n?/g, "\n")).digest("base64")}'`) : []; // Le navigateur normalise les fins de ligne avant de calculer l'empreinte
   const contentPolicy = [
@@ -101,13 +109,22 @@ export async function buildApp(opts: AppOptions = {}) {
   // ------------------------------------------------------------------ authentification
   const auth = async (req: FastifyRequest, reply: FastifyReply) => {
     const session = await authService.resolve(req.cookies[SESSION_COOKIE]);
-    if (!session) return reply.status(401).send({ error: "Non connecté" });
+    if (!session) return limiter.allow(`anon:${req.ip}`, limits.anonymousPerMinute, MINUTE) ? reply.status(401).send({ error: "Non connecté" }) : tooMany(reply);
+    if (!limiter.allow(`session:${session.sessionId}`, limits.sessionPerMinute, MINUTE)) return tooMany(reply);
     req.userId = session.userId;
     req.sessionId = session.sessionId;
     const orgs = await svc.orgsOf(session.userId);
     const wanted = unsign(req, ORG_COOKIE);
+    // Écrire ailleurs sans prévenir serait pire qu'une erreur : on efface le choix périmé et on le dit
+    if (wanted && !orgs.some((o) => o.id === wanted) && !/^\/api\/(me\b|orgs\/[^/]+\/switch)/.test(req.url)) {
+      reply.clearCookie(ORG_COOKIE, { path: "/" });
+      return reply.status(409).send({ error: "Votre accès à cette organisation a changé. Rechargez la page." });
+    }
     req.orgId = orgs.find((o) => o.id === wanted)?.id ?? orgs[0]?.id ?? "";
   };
+  const aiLimit = async (req: FastifyRequest, reply: FastifyReply) => { if (!limiter.allow(`ai:${req.userId}`, limits.aiPerMinute, MINUTE)) return tooMany(reply); };
+  const invitationLimit = async (req: FastifyRequest, reply: FastifyReply) => { if (!limiter.allow(`invite:${req.orgId}`, limits.invitationsPerHour, HOUR)) return tooMany(reply); };
+  const streams = new Map<string, number>();
 
   const requestInfo = (req: FastifyRequest) => ({ ip: req.ip, userAgent: String(req.headers["user-agent"] ?? "") });
   app.post("/api/auth/login", async (req, reply) => {
@@ -125,7 +142,7 @@ export async function buildApp(opts: AppOptions = {}) {
     reply.clearCookie(ORG_COOKIE, { path: "/" });
     return { status: result.status };
   });
-  const authDeps = { auth: authService, provisioning, access, secureCookies, demoLogin, clearOrgCookie: (reply: FastifyReply) => reply.clearCookie(ORG_COOKIE, { path: "/" }) };
+  const authDeps = { auth: authService, provisioning, access, secureCookies, demoLogin, invitationLimit, clearOrgCookie: (reply: FastifyReply) => reply.clearCookie(ORG_COOKIE, { path: "/" }) };
   publicAuthRoutes(app, authDeps);
   // Choix d'un profil sans mot de passe : uniquement en mode démo, sinon la route n'existe pas
   if (demoLogin) app.get("/api/auth/users", async () => (await db.query("SELECT id, name, title, avatar_color, is_ai, avatar_version FROM users WHERE NOT is_ai AND status = 'active' ORDER BY name")).map(withAvatar));
@@ -299,7 +316,7 @@ export async function buildApp(opts: AppOptions = {}) {
         subtasks: z.array(z.object({ title: z.string().trim().min(1).max(300), assignee_id: z.string().nullable(), due_on: importDate })).max(30),
       })).max(300),
     });
-    r.post("/api/import/analyze", { bodyLimit: IMPORT_MAX_BYTES }, async (req) => importer.analyze(me(req), org(req), fileName(req), fileBody(req)));
+    r.post("/api/import/analyze", { bodyLimit: IMPORT_MAX_BYTES, onRequest: aiLimit }, async (req) => importer.analyze(me(req), org(req), fileName(req), fileBody(req)));
     r.post("/api/import/create", async (req) => importer.create(me(req), org(req), ImportBody.parse(req.body)));
 
     // ---------------------------------------------------------------- boîte de réception & recherche
@@ -310,7 +327,7 @@ export async function buildApp(opts: AppOptions = {}) {
     // ---------------------------------------------------------------- IA
     r.get("/api/ai/status", async () => ({ provider: provider.name, model: provider.name === "anthropic" ? MODEL : null }));
     r.get("/api/ai/agents", async (req) => svc.agents(org(req)));
-    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/run", async (req) => {
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/run", { onRequest: aiLimit }, async (req) => {
       const { agent_id, instructions } = z.object({ agent_id: z.string(), instructions: z.string().max(4000).optional() }).parse(req.body);
       const t = await svc.getTask(me(req), req.params.id);
       await svc.require(me(req), t.project_id, "editor");
@@ -320,7 +337,7 @@ export async function buildApp(opts: AppOptions = {}) {
       if (!(await svc.projectRole(agent.id, t.project_id))) throw forbidden(`${agent.name} n'a pas accès à ce projet. Ajoutez-le aux membres du projet.`);
       return { run_id: await ai.start({ agentId: agent.id, kind: "task", taskId: t.id, projectId: t.project_id, requestedBy: me(req), instructions }) };
     });
-    r.post("/api/ai/chat", async (req) => {
+    r.post("/api/ai/chat", { onRequest: aiLimit }, async (req) => {
       const b = z.object({ messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1).max(20000) })).min(1).max(40), project_id: z.string().nullable().optional() }).parse(req.body);
       return { run_id: await ai.startAssistant(me(req), org(req), b.messages, b.project_id ?? null) };
     });
@@ -335,10 +352,10 @@ export async function buildApp(opts: AppOptions = {}) {
       const b = z.object({ approve: z.boolean(), edits: z.record(z.string(), z.unknown()).optional() }).parse(req.body);
       return ai.decide(req.params.id, me(req), b.approve, b.edits);
     });
-    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/subtasks", async (req) => ({ subtasks: await ai.suggestSubtasks(me(req), req.params.id) }));
-    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/description", async (req) => ai.improveDescription(me(req), req.params.id));
-    r.post<{ Params: { id: string } }>("/api/projects/:id/ai/status", async (req) => ai.projectStatus(me(req), req.params.id));
-    r.post<{ Params: { id: string } }>("/api/projects/:id/ai/parse", async (req) => ({ tasks: await ai.parseTasks(me(req), req.params.id, z.object({ text: z.string().min(1).max(20000) }).parse(req.body).text) }));
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/subtasks", { onRequest: aiLimit }, async (req) => ({ subtasks: await ai.suggestSubtasks(me(req), req.params.id) }));
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/ai/description", { onRequest: aiLimit }, async (req) => ai.improveDescription(me(req), req.params.id));
+    r.post<{ Params: { id: string } }>("/api/projects/:id/ai/status", { onRequest: aiLimit }, async (req) => ai.projectStatus(me(req), req.params.id));
+    r.post<{ Params: { id: string } }>("/api/projects/:id/ai/parse", { onRequest: aiLimit }, async (req) => ({ tasks: await ai.parseTasks(me(req), req.params.id, z.object({ text: z.string().min(1).max(20000) }).parse(req.body).text) }));
     r.get<{ Params: { id: string } }>("/api/projects/:id/ai/rules", async (req) => ai.listRules(me(req), req.params.id));
     r.post<{ Params: { id: string } }>("/api/projects/:id/ai/rules", async (req) => ai.saveRule(me(req), { ...z.object({
       id: z.string().optional(), name: z.string().min(1).max(120), trigger: z.enum(["task_created", "task_moved", "task_overdue"]), section_id: z.string().nullable().optional(),
@@ -349,6 +366,8 @@ export async function buildApp(opts: AppOptions = {}) {
     // ---------------------------------------------------------------- temps réel (SSE)
     r.get("/api/events", (req, reply) => {
       const userId = me(req);
+      if ((streams.get(userId) ?? 0) >= limits.ssePerUser) return tooMany(reply);
+      streams.set(userId, (streams.get(userId) ?? 0) + 1);
       reply.hijack();
       const res = reply.raw;
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
@@ -358,7 +377,7 @@ export async function buildApp(opts: AppOptions = {}) {
       const token = req.cookies[SESSION_COOKIE];
       // Une session révoquée ou un compte suspendu cesse aussi de recevoir le temps réel
       const ping = setInterval(() => { void authService.resolve(token).then((s) => { if (s) res.write(": ping\n\n"); else res.end(); }, () => res.end()); }, 25_000);
-      req.raw.on("close", () => { off(); clearInterval(ping); });
+      req.raw.on("close", () => { off(); clearInterval(ping); const left = (streams.get(userId) ?? 1) - 1; if (left > 0) streams.set(userId, left); else streams.delete(userId); });
     });
   });
 

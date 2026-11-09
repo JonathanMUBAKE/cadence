@@ -4,7 +4,7 @@ import type { Access } from "./access.js";
 import type { Provisioning } from "./provisioning.js";
 import { SESSION_COOKIE, SESSION_MAX_AGE, type Auth, type RequestInfo } from "./service.js";
 
-export interface AuthDeps { auth: Auth; provisioning: Provisioning; access: Access; secureCookies: boolean; demoLogin: boolean; clearOrgCookie: (reply: FastifyReply) => void }
+export interface AuthDeps { auth: Auth; provisioning: Provisioning; access: Access; secureCookies: boolean; demoLogin: boolean; invitationLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>; clearOrgCookie: (reply: FastifyReply) => void }
 
 const email = z.string().trim().max(320);
 const password = z.string().min(1).max(1024);
@@ -62,8 +62,8 @@ export function privateAuthRoutes(r: FastifyInstance, d: AuthDeps) {
 
   // ---------------------------------------------------------------- invitations
   r.get("/api/org/invitations", async (req) => provisioning.listInvitations(me(req), org(req)));
-  r.post("/api/org/invitations", async (req) => provisioning.invite(me(req), org(req), z.object({ email: email.regex(/^[^@\s]+@[^@\s]+$/), name: z.string().trim().min(1).max(120), profile_id: z.string() }).parse(req.body), info(req)));
-  r.post<Id>("/api/org/invitations/:id/resend", async (req) => provisioning.resendInvitation(me(req), org(req), req.params.id));
+  r.post("/api/org/invitations", { onRequest: d.invitationLimit }, async (req) => provisioning.invite(me(req), org(req), z.object({ email: email.regex(/^[^@\s]+@[^@\s]+$/), name: z.string().trim().min(1).max(120), profile_id: z.string() }).parse(req.body), info(req)));
+  r.post<Id>("/api/org/invitations/:id/resend", { onRequest: d.invitationLimit }, async (req) => provisioning.resendInvitation(me(req), org(req), req.params.id));
   r.delete<Id>("/api/org/invitations/:id", async (req) => { await provisioning.cancelInvitation(me(req), org(req), req.params.id, info(req)); return { ok: true }; });
   // Invitations reçues : c'est la personne qui décide
   r.get("/api/invitations", async (req) => provisioning.myInvitations(me(req)));

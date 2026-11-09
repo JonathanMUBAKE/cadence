@@ -98,9 +98,9 @@ export async function migrate(db: Db, dir = MIGRATIONS_DIR) {
   }
 }
 
-/** Découpe un fichier SQL en instructions (pas de fonctions plpgsql dans nos migrations). */
+/** Découpe un fichier SQL en instructions, sans couper le corps $$…$$ d'une fonction. */
 function splitSql(sql: string) {
-  return sql.replace(/--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean);
+  return (sql.replace(/--.*$/gm, "").match(/(?:\$\$[\s\S]*?\$\$|[^;])+/g) ?? []).map((s) => s.trim()).filter(Boolean);
 }
 
 export const uid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;

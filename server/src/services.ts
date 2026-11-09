@@ -375,6 +375,7 @@ export class Services {
   }
   async setMemberUnit(actorId: string, orgId: string, userId: string, unitId: string | null) {
     await this.requirePerm(actorId, orgId, "org.structure");
+    if (!(await this.orgRole(userId, orgId))) throw notFound("Cette personne n'est pas membre de l'organisation");
     if (unitId && (await this.unitRow(unitId)).org_id !== orgId) throw badRequest("Entité invalide");
     await this.db.query("UPDATE org_members SET unit_id = $1 WHERE org_id = $2 AND user_id = $3", [unitId, orgId, userId]);
     this.bus.emit({ type: "org.changed", actorId, orgId });
