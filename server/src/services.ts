@@ -56,7 +56,13 @@ export const badRequest = (msg: string) => new HttpError(400, msg);
 export const ROLE_RANK: Record<Role, number> = { viewer: 1, commenter: 2, editor: 3, admin: 4 };
 const RANK_ROLE: Role[] = ["viewer", "viewer", "commenter", "editor", "admin"];
 const ORG_RANK: Record<OrgRole, number> = { guest: 1, member: 2, admin: 3, owner: 4 };
-export const today = () => new Date().toISOString().slice(0, 10);
+/** Date du calendrier local au format AAAA-MM-JJ : « aujourd'hui » suit l'heure de l'installation, pas UTC. */
+export const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+export const today = () => localDate();
+const isRealDate = (v: string) => { const t = Date.parse(`${v}T00:00:00Z`); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v; };
+const assertDates = (...values: (string | null | undefined)[]) => { for (const v of values) if (v && !isRealDate(v)) throw badRequest(`Date invalide : ${v}`); };
+/** Reconnaît @Prénom sans s'arrêter aux lettres accentuées, que \b ne connaît pas. */
+export const mentionPattern = (name: string, prefix = "@") => new RegExp(`${prefix}${name.split(" ")[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu");
 const KEY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
 
 /**
@@ -224,8 +230,10 @@ export class Services {
   }
   async setOrgMember(actorId: string, orgId: string, userId: string, role: OrgRole | null) {
     const mine = await this.requireOrg(actorId, orgId, "admin");
+    await this.user(userId);
     const current = await this.orgRole(userId, orgId);
     if (role === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut nommer un propriétaire");
+    if (current === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut modifier ou retirer un propriétaire");
     if (current === "owner" && role !== "owner") {
       const owners = await this.db.one<{ n: number }>("SELECT count(*)::int AS n FROM org_members WHERE org_id = $1 AND role = 'owner'", [orgId]);
       if ((owners?.n ?? 0) <= 1) throw badRequest("Impossible de retirer le dernier propriétaire de l'organisation");
@@ -452,7 +460,7 @@ export class Services {
       SELECT p.*, a.rank, tm.name AS team_name,
         (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL) AS task_count,
         (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL AND t.completed) AS done_count,
-        (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND NOT t.completed AND t.due_on < $3::date) AS overdue_count
+        (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL AND NOT t.completed AND t.due_on < $3::date) AS overdue_count
       FROM (${ACCESS_SQL}) a JOIN projects p ON p.id = a.id LEFT JOIN teams tm ON tm.id = p.team_id
       WHERE a.rank > 0 AND p.org_id = $2 AND p.archived = $4 ORDER BY tm.name NULLS LAST, p.created_at`, [actorId, orgId, today(), !!opts.archived]);
     const out = [];
@@ -494,6 +502,7 @@ export class Services {
     const orgRole = await this.requireOrg(actorId, orgId, "member");
     const name = input.name?.trim();
     if (!name) throw badRequest("Le nom du projet est obligatoire");
+    assertDates(input.due_on);
     if (input.team_id) {
       const t = await this.teamRow(input.team_id);
       if (t.org_id !== orgId) throw badRequest("Équipe invalide");
@@ -518,6 +527,7 @@ export class Services {
   async updateProject(actorId: string, projectId: string, patch: Partial<Pick<Project, "name" | "description" | "color" | "icon" | "status" | "due_on" | "archived" | "team_id" | "access">>) {
     const role = await this.require(actorId, projectId, "editor");
     if ((patch.team_id !== undefined || patch.access !== undefined) && role !== "admin") throw forbidden("Seuls les administrateurs du projet changent son équipe ou son accès");
+    assertDates(patch.due_on);
     const p = await this.projectRow(projectId);
     if (patch.team_id) { const t = await this.teamRow(patch.team_id); if (t.org_id !== p.org_id) throw badRequest("Équipe invalide"); }
     const allowed = ["name", "description", "color", "icon", "status", "due_on", "archived", "team_id", "access"] as const;
@@ -624,18 +634,18 @@ export class Services {
     return toTask(r);
   }
   /** Résout « APP-12 », « #12 » (si non ambigu) ou un identifiant interne, parmi ce que l'acteur peut lire. */
-  async resolveTaskId(actorId: string, ref: string): Promise<string> {
+  async resolveTaskId(actorId: string, ref: string, orgId?: string | null): Promise<string> {
     const s = String(ref).trim();
     const byKey = s.match(/^([A-Za-z][A-Za-z0-9]{1,9})-(\d+)$/);
     const byNum = s.match(/^#?(\d+)$/);
     if (!byKey && !byNum) return s;
-    const readable = await this.readableProjectIds(actorId, null, true);
+    const readable = await this.readableProjectIds(actorId, orgId ?? null, true);
     if (!readable.length) throw notFound(`Tâche ${s} introuvable`);
     const rows = byKey
       ? await this.db.query<{ id: string }>("SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.key = $1 AND t.number = $2 AND t.project_id = ANY($3)", [byKey[1].toUpperCase(), Number(byKey[2]), readable])
       : await this.db.query<{ id: string }>("SELECT id FROM tasks WHERE number = $1 AND project_id = ANY($2)", [Number(byNum![1]), readable]);
     if (!rows.length) throw notFound(`Tâche ${s} introuvable`);
-    if (rows.length > 1) throw badRequest(`Plusieurs tâches portent le numéro ${s} : précisez la clé, par exemple APP-${byNum?.[1]}`);
+    if (rows.length > 1) throw badRequest(`Plusieurs tâches correspondent à ${s} : ${byNum ? `précisez la clé, par exemple APP-${byNum[1]}` : "ouvrez l'organisation concernée"}`);
     return rows[0].id;
   }
 
@@ -656,7 +666,8 @@ export class Services {
     if (f.due_after) add("t.due_on IS NOT NULL AND t.due_on >= ?::date", f.due_after);
     if (f.priority) add("t.priority = ?", f.priority);
     if (f.text) { params.push(`%${f.text}%`); where.push(`(t.title ILIKE $${params.length} OR t.description ILIKE $${params.length})`); }
-    params.push(Math.max(1, Math.min(Number(f.limit) || 500, 1000)));
+    // La liste d'un projet est complète : plafonnée, elle fausserait le tableau et les indicateurs
+    params.push(f.limit !== undefined ? Math.max(1, Math.min(Number(f.limit) || 500, 1000)) : f.project_id ? null : 500);
     return (await this.db.query<Row>(`
       SELECT ${TASK_COLS},
         (SELECT count(*)::int FROM tasks s WHERE s.parent_id = t.id) AS subtask_count,
@@ -693,6 +704,7 @@ export class Services {
     const title = input.title?.trim();
     if (!title) throw badRequest("Le titre est obligatoire");
     await this.require(actorId, input.project_id, "editor");
+    assertDates(input.start_on, input.due_on);
     let sectionId = input.section_id ?? null;
     let parentId = input.parent_id ?? null;
     if (parentId) {
@@ -731,6 +743,7 @@ export class Services {
   async updateTask(actorId: string, ref: string, patch: TaskPatch): Promise<Task> {
     const before = await this.taskRow(await this.resolveTaskId(actorId, ref));
     await this.require(actorId, before.project_id, "editor");
+    assertDates(patch.start_on, patch.due_on);
     const start = patch.start_on !== undefined ? patch.start_on : before.start_on;
     const due = patch.due_on !== undefined ? patch.due_on : before.due_on;
     if (start && due && start > due) throw badRequest("La date de début doit précéder l'échéance");
@@ -741,6 +754,7 @@ export class Services {
       if (v === undefined) continue;
       if (k === "title" && !String(v).trim()) throw badRequest("Le titre ne peut pas être vide");
       if (k === "assignee_id" && v) await this.checkAssignee(before.project_id, String(v));
+      if (k === "section_id" && v === null && !before.parent_id) throw badRequest("Une tâche doit rester dans une section");
       if (k === "section_id" && v) {
         const s = await this.db.one<Section>("SELECT * FROM sections WHERE id = $1", [v]);
         if (!s || s.project_id !== before.project_id) throw badRequest("Section invalide");
@@ -846,7 +860,7 @@ export class Services {
     // Mentions @Prénom, limitées aux membres de l'organisation qui ont accès au projet
     const mentions: string[] = [];
     for (const u of await this.usersOf(orgId)) {
-      if (u.id === actorId || !new RegExp(`@${u.name.split(" ")[0]}\\b`, "i").test(text)) continue;
+      if (u.id === actorId || !mentionPattern(u.name).test(text)) continue;
       if (await this.projectRole(u.id, task.project_id)) mentions.push(u.id);
     }
     const author = await this.user(actorId);
@@ -931,9 +945,9 @@ export class Services {
       byAssignee.set(k, e);
     }
     const byPriority = (["urgent", "high", "medium", "low", "none"] as Priority[]).map((p) => ({ priority: p, open: tasks.filter((x) => !x.completed && x.priority === p).length }));
-    const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d.toISOString().slice(0, 10); });
+    const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return localDate(d); });
     const burnup = days.map((d) => ({ day: d, done: tasks.filter((x) => x.completed && (x.completed_at ?? "").slice(0, 10) <= d).length, total: tasks.filter((x) => x.created_at.slice(0, 10) <= d).length }));
-    const week = new Date(); week.setDate(week.getDate() + 7); const w = week.toISOString().slice(0, 10);
+    const week = new Date(); week.setDate(week.getDate() + 7); const w = localDate(week);
     return {
       total: tasks.length, done: tasks.filter((x) => x.completed).length,
       overdue: tasks.filter((x) => !x.completed && x.due_on && x.due_on < t).length,

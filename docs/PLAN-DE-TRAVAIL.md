@@ -80,7 +80,7 @@ Objectif : plus personne ne peut se connecter à la place d'un autre ni lister l
   - `@fastify/rate-limit` : 10 tentatives de connexion / 15 min par IP et par e-mail ; 300 requêtes / min par session sur l'API.
   - `@fastify/helmet` : CSP adaptée à l'interface Vite, `X-Content-Type-Options`, `Referrer-Policy`, HSTS en production.
   - Protection CSRF : vérifier l'en-tête `Origin` sur les requêtes qui modifient (POST/PUT/PATCH/DELETE).
-- [ ] **A4. Secrets obligatoires en production** (corrige E4)
+- [x] **A4. Secrets obligatoires en production** (corrige E4)
   - Si `NODE_ENV=production` et que `COOKIE_SECRET` ou `CADENCE_SECRET_KEY` manque ou fait moins de 32 caractères → refuser de démarrer avec un message clair.
   - Documenter dans `.env.example` et le README.
 - [ ] **A5. Mot de passe oublié** (utilise la messagerie existante)
@@ -166,3 +166,5 @@ Ne pas commencer le Lot D3 avant la réponse à Q1.
 | Date | Qui | Lot | Ce qui a été fait | Branche / commit |
 | --- | --- | --- | --- | --- |
 | 2026-11-09 | Claude (session cloud) | — | Audit complet, rédaction de ce plan | `main` |
+| 2026-11-09 | Claude (session sur l'ordinateur) | A (partiel) | A4 fait. E2 réduit : plus d'e-mail dans la liste publique. E1 contenu, pas corrigé : écoute locale par défaut, refus de démarrer sur le réseau ou en production sans `CADENCE_DEMO=1`. Un administrateur ne peut plus modifier un propriétaire. A1, A2, A3 et A5 restent à faire. | `lot-a-securite` |
+| 2026-11-09 | Claude (session sur l'ordinateur) | Stabilisation | Tableau Kanban : dépôt fiable dans une colonne vide ou courte. Mentions accentuées, dates impossibles, membre inexistant, retards incohérents, plafond de 500 tâches, clés identiques entre organisations, exécutions IA orphelines ou impossibles à annuler, règles sur une section étrangère, date locale, `npm run dev` sous Windows, page d'erreur. E5 à E9 restent à faire (lot B). | `lot-a-securite` |

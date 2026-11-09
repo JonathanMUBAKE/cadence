@@ -125,6 +125,9 @@ export class ToolRunner {
     return p.id;
   }
 
+  /** Une clé comme APP-12 se lit dans l'organisation où travaille l'agent. */
+  private taskId(ctx: ToolCtx, ref: unknown) { return this.svc.resolveTaskId(ctx.actorId, String(ref), ctx.orgId); }
+
   async brief(t: Task) {
     const u = t.assignee_id ? await this.svc.userOrNull(t.assignee_id) : null;
     const sec = t.section_id ? (await this.svc.db.one<{ name: string }>("SELECT name FROM sections WHERE id = $1", [t.section_id]))?.name : null;
@@ -164,7 +167,7 @@ export class ToolRunner {
         return { count: tasks.length, tasks: out };
       }
       case "get_task": {
-        const t = await s.getTask(actorId, String(input.task));
+        const t = await s.getTask(actorId, await this.taskId(ctx, input.task));
         const subtasks = []; for (const x of t.subtasks) subtasks.push(await this.brief(x));
         const comments = [];
         for (const c of t.comments.slice(-8)) comments.push({ author: (await s.user(c.author_id)).name, body: c.body.slice(0, 500), at: c.created_at.slice(0, 16) });
@@ -174,13 +177,13 @@ export class ToolRunner {
         const projectId = await this.resolveProject(ctx, input.project_id);
         const t = await s.createTask(actorId, {
           project_id: projectId, title: String(input.title ?? ""), description: str(input.description),
-          section_id: await this.resolveSection(projectId, input.section), parent_id: str(input.parent),
+          section_id: await this.resolveSection(projectId, input.section), parent_id: str(input.parent) ? await this.taskId(ctx, input.parent) : undefined,
           assignee_id: await this.resolveUser(ctx.orgId, input.assignee), due_on: str(input.due_on), priority: str(input.priority) as Priority | undefined,
         });
         return { created: await this.brief(t) };
       }
       case "update_task": {
-        const cur = await s.getTask(actorId, String(input.task));
+        const cur = await s.getTask(actorId, await this.taskId(ctx, input.task));
         const t = await s.updateTask(actorId, cur.id, {
           title: str(input.title), description: str(input.description),
           section_id: await this.resolveSection(cur.project_id, input.section),
@@ -191,13 +194,13 @@ export class ToolRunner {
         return { updated: await this.brief(t) };
       }
       case "add_comment": {
-        const c = await s.addComment(actorId, String(input.task), String(input.body ?? ""), str(input.__run_id) ?? null);
+        const c = await s.addComment(actorId, await this.taskId(ctx, input.task), String(input.body ?? ""), str(input.__run_id) ?? null);
         return { commented: true, comment_id: c.id };
       }
       case "remember": {
         const type = input.object_type === "task" ? "task" : "project";
         let objectId: string; let projectId: string;
-        if (type === "task") { const t = await s.getTask(actorId, String(input.object_id)); objectId = t.id; projectId = t.project_id; }
+        if (type === "task") { const t = await s.getTask(actorId, await this.taskId(ctx, input.object_id)); objectId = t.id; projectId = t.project_id; }
         else { projectId = await this.resolveProject(ctx, input.object_id); objectId = projectId; await s.require(actorId, projectId); }
         await s.db.query("INSERT INTO ai_memories (id, agent_id, object_type, object_id, project_id, content) VALUES ($1,$2,$3,$4,$5,$6)",
           [uid("mem"), actorId, type, objectId, projectId, String(input.content ?? "")]);
@@ -211,7 +214,7 @@ export class ToolRunner {
   /** Phrase lisible pour la carte de validation. */
   async describe(ctx: ToolCtx, name: string, input: Input): Promise<string> {
     const s = this.svc;
-    const taskTitle = async (ref: unknown) => { try { const t = await s.getTask(ctx.actorId, String(ref)); return `${t.key} « ${t.title} »`; } catch { return String(ref); } };
+    const taskTitle = async (ref: unknown) => { try { const t = await s.getTask(ctx.actorId, await this.taskId(ctx, ref)); return `${t.key} « ${t.title} »`; } catch { return String(ref); } };
     const who = async (ref: unknown) => { try { const id = await this.resolveUser(ctx.orgId, ref); return id ? (await s.user(id)).name : "personne"; } catch { return String(ref); } };
     switch (name) {
       case "add_comment": return `Commenter ${await taskTitle(input.task)}`;

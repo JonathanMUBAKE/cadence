@@ -61,6 +61,8 @@ Développement avec rechargement à chaud : `npm run dev` lance l'API sur le por
 3. Déclarez la chaîne de connexion, appliquez les migrations, puis démarrez :
    ```bash
    export DATABASE_URL="postgresql://postgres.<ref>:<mot-de-passe>@aws-0-<région>.pooler.supabase.com:5432/postgres"
+   export COOKIE_SECRET="<32 caractères aléatoires ou plus>"
+   export CADENCE_SECRET_KEY="<32 autres caractères aléatoires ou plus>"
    npm run build && npm run migrate && npm start
    ```
    Les migrations s'appliquent aussi automatiquement au démarrage. Elles sont versionnées dans `server/migrations/` et n'agissent qu'une fois.
@@ -86,13 +88,15 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | `DATA_DIR` | Dossier du PostgreSQL embarqué (`:memory:` pour une base éphémère) | `server/data` |
 | `ANTHROPIC_API_KEY` | Active Claude | mode démo |
 | `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
-| `COOKIE_SECRET` | Signature des sessions (**à changer en production**) | valeur de développement |
-| `CADENCE_SECRET_KEY` | Clé de chiffrement des secrets en base (mot de passe SMTP). **À fixer en production** : la changer rend les mots de passe enregistrés illisibles. | `COOKIE_SECRET` |
+| `HOST` | Adresse d'écoute. Toute autre valeur que l'ordinateur local exige `CADENCE_DEMO=1` | `127.0.0.1` |
+| `CADENCE_DEMO` | `1` : accepte d'exposer la connexion de démonstration, sans mot de passe, au réseau ou en production | désactivé |
+| `COOKIE_SECRET` | Signature des sessions, 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` | généré dans `server/.cadence-secret` |
+| `CADENCE_SECRET_KEY` | Clé de chiffrement des secrets en base (mot de passe SMTP), 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` : la changer rend les mots de passe enregistrés illisibles. | `COOKIE_SECRET`, sinon le secret local |
 
 ## Tests
 
 ```bash
-npm test          # 51 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
+npm test          # 72 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 
@@ -122,4 +126,4 @@ web/src
 2. **L'IA est un utilisateur comme un autre.** Elle a des adhésions et des rôles, et chaque outil vérifie ses droits.
 3. **Humain dans la boucle.** Les écritures passent par une validation, sauf si une règle l'autorise explicitement. Tout est journalisé.
 
-> Espace de démonstration : la connexion se fait en choisissant un profil, sans mot de passe. Avant une mise en production, branchez une vraie authentification (OAuth/SSO) dans `server/src/app.ts`.
+> Espace de démonstration : la connexion se fait en choisissant un profil, sans mot de passe. Cadence n'écoute donc que sur l'ordinateur local et refuse de démarrer sur le réseau ou en production sans `CADENCE_DEMO=1`. Avant une mise en ligne, branchez une vraie authentification (voir `docs/PLAN-DE-TRAVAIL.md`, lot A).

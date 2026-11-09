@@ -1,6 +1,6 @@
 import { uid } from "../db.js";
 import type { Bus, DomainEvent } from "../bus.js";
-import { badRequest, forbidden, notFound, today, type Services, type User } from "../services.js";
+import { badRequest, forbidden, localDate, notFound, today, type Services, type User } from "../services.js";
 import { READ_TOOLS, WRITE_TOOLS, WRITE_TOOL_NAMES, ToolRunner, type ToolCtx } from "./tools.js";
 import { RefusalError, type AgentMode, type AiProvider, type Msg, type TextBlock, type ToolResultBlock, type ToolUseBlock } from "./provider.js";
 
@@ -22,6 +22,8 @@ export interface AiRule {
 }
 
 const MAX_ROUNDS = 12;
+/** Assez large pour une recherche complète ou une analyse : un JSON coupé est inexploitable. */
+const TOOL_RESULT_MAX = 24_000;
 const trim = (v: unknown, n = 4000) => { const s = typeof v === "string" ? v : JSON.stringify(v); return s.length > n ? s.slice(0, n) + "…" : s; };
 const parse = (s: unknown) => { if (typeof s !== "string") return s; try { return JSON.parse(s); } catch { return s; } };
 
@@ -72,7 +74,18 @@ export class AiEngine {
     return !!(await this.svc.db.one<{ is_ai: boolean }>("SELECT is_ai FROM users WHERE id = $1", [id]))?.is_ai;
   }
 
+  /** Une exécution dont le projet ou la tâche a disparu ne doit pas attendre indéfiniment une validation impossible. */
+  private async cancelRuns(column: "project_id" | "task_id", id: string) {
+    for (const r of await this.svc.db.query<{ id: string }>(`SELECT id FROM ai_runs WHERE ${column} = $1 AND status IN ('queued','running','waiting_approval')`, [id])) {
+      this.controllers.get(r.id)?.abort();
+      await this.finish(r.id, "cancelled", null);
+    }
+  }
+
   private async onEvent(e: DomainEvent) {
+    if (e.type === "project.deleted") return this.cancelRuns("project_id", e.projectId);
+    // Un déplacement vers un autre projet émet aussi task.deleted : la tâche existe alors toujours
+    if (e.type === "task.deleted" && !(await this.svc.db.one("SELECT 1 FROM tasks WHERE id = $1", [e.taskId]))) return this.cancelRuns("task_id", e.taskId);
     if (!("actorId" in e) || (await this.isAi(e.actorId))) return; // jamais de boucle IA → IA
     if (e.type === "task.created" || (e.type === "task.updated" && e.changes.includes("assignee_id"))) {
       const t = await this.svc.db.one<{ assignee_id: string | null }>("SELECT assignee_id FROM tasks WHERE id = $1", [e.taskId]);
@@ -220,6 +233,8 @@ export class AiEngine {
 
       const results: ToolResultBlock[] = [];
       for (const b of res.content.filter((x): x is ToolUseBlock => x.type === "tool_use")) {
+        // Sans ce contrôle, l'action suivante ouvrirait une validation que plus rien ne peut clore
+        if (o.signal.aborted) throw new CancelledError();
         const input = (b.input && typeof b.input === "object" ? b.input : {}) as Record<string, unknown>;
         const stepId = await this.step(runId, { kind: "tool", tool: b.name, input, status: "running" });
         if (WRITE_TOOL_NAMES.has(b.name) && !o.autoApprove) {
@@ -234,7 +249,7 @@ export class AiEngine {
         try {
           const out = await this.tools.execute(o.ctx, b.name, b.name === "add_comment" ? { ...input, __run_id: runId } : input);
           await this.updateStep(stepId, "ok", out);
-          results.push({ type: "tool_result", tool_use_id: b.id, content: trim(out) });
+          results.push({ type: "tool_result", tool_use_id: b.id, content: trim(out, TOOL_RESULT_MAX) });
         } catch (err) {
           const msg = (err as Error).message;
           await this.updateStep(stepId, "error", msg);
@@ -385,6 +400,7 @@ export class AiEngine {
     if (!(await this.svc.projectRole(agent.id, input.project_id))) throw badRequest(`${agent.name} n'a pas accès au projet`);
     if (!input.name?.trim() || !input.instructions?.trim()) throw badRequest("Nom et consigne obligatoires");
     if (!["task_created", "task_moved", "task_overdue"].includes(String(input.trigger))) throw badRequest("Déclencheur invalide");
+    if (input.section_id && !(await this.svc.db.one("SELECT 1 FROM sections WHERE id = $1 AND project_id = $2", [input.section_id, input.project_id]))) throw badRequest("Section invalide pour ce projet");
     if (input.id) {
       const r = await this.getRule(input.id);
       if (r.project_id !== input.project_id) throw forbidden();
@@ -507,7 +523,7 @@ function describeError(err: unknown): string {
   return e?.message ?? String(err);
 }
 
-const addDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const addDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return localDate(d); };
 
 function teammateSystem(agent: User) {
   return [

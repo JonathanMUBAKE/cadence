@@ -5,7 +5,7 @@
  */
 import type { AiProvider, ContentBlock, JsonRequest, Msg, ToolResultBlock, TurnRequest, TurnResult } from "./provider.js";
 import type { Services } from "../services.js";
-import { today } from "../services.js";
+import { localDate, mentionPattern, today } from "../services.js";
 
 type Parsed = { name: string; input: Record<string, unknown>; ok: boolean; out: unknown };
 
@@ -74,7 +74,7 @@ export class DemoProvider implements AiProvider {
         const steps = ["Rassembler les éléments et l'état des lieux", "Produire une première version", "Faire relire et valider"];
         steps.forEach((title, i) => {
           const d = new Date(); d.setDate(d.getDate() + i + 1);
-          writes.push(call("create_task", { project_id: task.project_id, parent: task.key, title: `${title}`, due_on: d.toISOString().slice(0, 10) }));
+          writes.push(call("create_task", { project_id: task.project_id, parent: task.key, title: `${title}`, due_on: localDate(d) }));
         });
       }
       if (writes.length) return this.tools(...writes);
@@ -124,7 +124,7 @@ export class DemoProvider implements AiProvider {
       if (create && pid) return this.tools(call("create_task", { project_id: pid, title: create[1].replace(/^["«\s]+|["»\s]+$/g, "").replace(/^./, (c) => c.toUpperCase()) }));
       if (/retard|overdue|en retard/.test(q)) return this.tools(call("search_tasks", { project_id: pid, overdue: true }));
       if (/\bmes\b|\bmoi\b|ma semaine|mon travail/.test(q)) return this.tools(call("search_tasks", { assignee: me, completed: false }));
-      if (/semaine|bientôt|échéance|cette semaine/.test(q)) { const d = new Date(); d.setDate(d.getDate() + 7); return this.tools(call("search_tasks", { project_id: pid, completed: false, due_before: d.toISOString().slice(0, 10) })); }
+      if (/semaine|bientôt|échéance|cette semaine/.test(q)) { const d = new Date(); d.setDate(d.getDate() + 7); return this.tools(call("search_tasks", { project_id: pid, completed: false, due_before: localDate(d) })); }
       if (/urgent|priorit/.test(q)) return this.tools(call("search_tasks", { project_id: pid, priority: "urgent", completed: false }), call("search_tasks", { project_id: pid, priority: "high", completed: false }));
       if (/résum|statut|avancement|où en|point/.test(q)) return pid ? this.tools(call("get_project", { project_id: pid })) : this.tools(call("list_projects", {}));
       const words = q.replace(/[?!.,]/g, " ").split(/\s+/).filter((w) => w.length > 4);
@@ -187,11 +187,11 @@ export class DemoProvider implements AiProvider {
         const users = (d.members as { id: string; name: string }[]) ?? [];
         const items = text.split(/\n|;|•|- (?=\S)/).map((s) => s.trim()).filter((s) => s.length > 2);
         return { tasks: items.slice(0, 20).map((line) => {
-          const who = users.find((u) => new RegExp(`@?${u.name.split(" ")[0]}\\b`, "i").test(line));
+          const who = users.find((u) => mentionPattern(u.name, "@?").test(line));
           const dt = new Date();
           let due: string | null = null;
-          if (/demain/i.test(line)) { dt.setDate(dt.getDate() + 1); due = dt.toISOString().slice(0, 10); }
-          else if (/semaine prochaine/i.test(line)) { dt.setDate(dt.getDate() + 7); due = dt.toISOString().slice(0, 10); }
+          if (/demain/i.test(line)) { dt.setDate(dt.getDate() + 1); due = localDate(dt); }
+          else if (/semaine prochaine/i.test(line)) { dt.setDate(dt.getDate() + 7); due = localDate(dt); }
           else { const m = line.match(/(\d{1,2})\/(\d{1,2})/); if (m) due = `${dt.getFullYear()}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
           const priority = /urgent|asap|critique/i.test(line) ? "urgent" : /important|prioritaire/i.test(line) ? "high" : "none";
           const title = line.replace(/@\w+/g, "").replace(/\b(demain|urgent|asap|semaine prochaine|pour le \d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})\b/gi, "").replace(/\s{2,}/g, " ").replace(/[,.\s]+$/, "").trim();

@@ -11,6 +11,7 @@ import { AiEngine } from "./ai/engine.js";
 import { AnthropicProvider, MODEL, type AiProvider } from "./ai/provider.js";
 import { DemoProvider } from "./ai/demo.js";
 import { seedIfEmpty } from "./seed.js";
+import { cookieSecret } from "./secrets.js";
 
 export interface AppOptions {
   databaseUrl?: string; dataDir?: string; provider?: AiProvider | "auto" | "demo"; webDist?: string;
@@ -36,7 +37,7 @@ export async function buildApp(opts: AppOptions = {}) {
   const detachMail = mail.attach();
 
   const app = Fastify({ logger: opts.logger ?? false });
-  await app.register(cookie, { secret: process.env.COOKIE_SECRET || "cadence-dev-secret-change-me" });
+  await app.register(cookie, { secret: cookieSecret() });
   app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -71,7 +72,8 @@ export async function buildApp(opts: AppOptions = {}) {
     return u;
   });
   app.post("/api/auth/logout", async (_req, reply) => { reply.clearCookie(COOKIE, { path: "/" }); reply.clearCookie(ORG_COOKIE, { path: "/" }); return { ok: true }; });
-  app.get("/api/auth/users", async () => (await db.query("SELECT * FROM users WHERE NOT is_ai ORDER BY name")).map(withAvatar));
+  // Route publique : uniquement ce que la page de choix du profil affiche, jamais d'e-mail
+  app.get("/api/auth/users", async () => (await db.query("SELECT id, name, title, avatar_color, is_ai, avatar_version FROM users WHERE NOT is_ai ORDER BY name")).map(withAvatar));
 
   app.register(async (r) => {
     r.addHook("preHandler", auth);
@@ -198,7 +200,7 @@ export async function buildApp(opts: AppOptions = {}) {
       const out = []; for (const t of tasks) out.push(await svc.createTask(me(req), { ...t, project_id: req.params.id }));
       return out;
     });
-    r.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => svc.getTask(me(req), req.params.id));
+    r.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => svc.getTask(me(req), await svc.resolveTaskId(me(req), req.params.id, org(req))));
     r.patch<{ Params: { id: string } }>("/api/tasks/:id", async (req) => svc.updateTask(me(req), req.params.id, TaskBody.omit({ project_id: true, parent_id: true }).partial().extend({ completed: z.boolean().optional() }).parse(req.body)));
     r.post<{ Params: { id: string } }>("/api/tasks/:id/move", async (req) => svc.moveTask(me(req), req.params.id, z.object({ section_id: z.string(), before_id: z.string().nullable().optional(), after_id: z.string().nullable().optional() }).parse(req.body)));
     r.post<{ Params: { id: string } }>("/api/tasks/:id/duplicate", async (req) => svc.duplicateTask(me(req), req.params.id, z.object({ subtasks: z.boolean().optional() }).parse(req.body ?? {})));

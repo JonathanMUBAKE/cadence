@@ -84,6 +84,8 @@ export function useMoveTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; section_id: string; before_id?: string | null; after_id?: string | null }) => api.post<Task>(`/api/tasks/${v.id}/move`, v),
+    // Une relecture déjà en route ne doit pas ramener la carte à son ancienne place
+    onMutate: () => qc.cancelQueries({ queryKey: ["tasks"] }),
     onError: errorToast,
     onSettled: (_d, _e, v) => invalidateTask(qc, v.id),
   });
@@ -145,7 +147,7 @@ export function useLiveUpdates(enabled: boolean) {
         if (e.taskId) queue(["task", e.taskId]);
         return;
       }
-      queue(["tasks"], ["projects"], ["stats"], ["activity"]);
+      queue(["tasks"], ["projects"], ["stats"], ["activity"], ["updates"]);
       if (e.projectId) queue(["project", e.projectId]);
       if (e.taskId) queue(["task", e.taskId]);
     };

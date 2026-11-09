@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import "./styles.css";
 import { queryClient } from "./lib/hooks";
 import { TooltipProvider } from "./components/ui";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/Login";
 import { HomePage } from "./pages/Home";
@@ -18,6 +19,7 @@ import { TeamPage, TeamsPage } from "./pages/Teams";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <BrowserRouter>
@@ -38,5 +40,6 @@ createRoot(document.getElementById("root")!).render(
         <Toaster position="bottom-left" toastOptions={{ className: "!rounded-xl !border-line !bg-raised !text-fg !shadow-lg !text-[13px]" }} />
       </TooltipProvider>
     </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

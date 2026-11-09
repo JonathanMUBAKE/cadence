@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  DndContext, DragOverlay, KeyboardSensor, PointerSensor, TouchSensor, closestCorners, useDroppable, useSensor, useSensors,
-  type DragEndEvent, type DragOverEvent, type DragStartEvent,
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, TouchSensor, closestCenter, closestCorners, pointerWithin, useDroppable, useSensor, useSensors,
+  type Collision, type CollisionDetection, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -27,6 +27,7 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
   const derive = () => Object.fromEntries(project.sections.map((s) => [s.id, tasks.filter((t) => t.section_id === s.id).sort((a, b) => a.position - b.position).map((t) => t.id)])) as Columns;
   const [cols, setCols] = useState<Columns>(derive);
   const [dragging, setDragging] = useState<string | null>(null);
+  const lastOver = useRef<Collision[]>([]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!dragging) setCols(derive()); }, [tasks, project.sections]);
 
@@ -36,8 +37,20 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   const columnOf = (id: string) => (cols[id] ? id : Object.keys(cols).find((k) => cols[k].includes(id)));
+  // La colonne sous le pointeur décide : comparer les coins faisait gagner les cartes voisines face à une colonne vide ou courte
+  const collision: CollisionDetection = (args) => {
+    const { droppableContainers, pointerCoordinates } = args;
+    if (!pointerCoordinates) return closestCorners(args);
+    const column = pointerWithin({ ...args, droppableContainers: droppableContainers.filter((c) => cols[String(c.id)]) })[0];
+    // Entre deux colonnes, on garde la dernière cible : recalculer ferait sauter la carte d'une colonne à l'autre sans fin
+    if (!column) return lastOver.current;
+    const inColumn = new Set(cols[String(column.id)]);
+    const cards = droppableContainers.filter((c) => inColumn.has(String(c.id)));
+    lastOver.current = cards.length ? closestCenter({ ...args, droppableContainers: cards }) : [column];
+    return lastOver.current;
+  };
 
-  const onStart = (e: DragStartEvent) => setDragging(String(e.active.id));
+  const onStart = (e: DragStartEvent) => { lastOver.current = []; setDragging(String(e.active.id)); };
   const onOver = (e: DragOverEvent) => {
     const a = String(e.active.id), o = e.over ? String(e.over.id) : null;
     if (!o) return;
@@ -65,13 +78,13 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
     const i = list.indexOf(a);
     const t = byId.get(a)!;
     const before = list[i + 1] ?? null, after = list[i - 1] ?? null;
-    if (t.section_id === col && e.active.id === o && list.length === 1) return;
-    move.mutate({ id: a, section_id: col, before_id: before, after_id: after });
+    if (t.section_id === col && derive()[col].join() === list.join()) return; // déposée à sa place
+    move.mutate({ id: a, section_id: col, before_id: before, after_id: after }, { onError: () => setCols(derive()) });
   };
 
   const active = dragging ? byId.get(dragging) : null;
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onStart} onDragOver={onOver} onDragEnd={onEnd} onDragCancel={() => { setDragging(null); setCols(derive()); }}>
+    <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onStart} onDragOver={onOver} onDragEnd={onEnd} onDragCancel={() => { setDragging(null); setCols(derive()); }}>
       <div className="flex h-full gap-3 overflow-x-auto px-4 py-5 sm:px-8">
         {project.sections.map((s) => (
           <Column key={s.id} id={s.id} name={s.name} count={cols[s.id]?.length ?? 0} done={(cols[s.id] ?? []).filter((id) => byId.get(id)?.completed).length}

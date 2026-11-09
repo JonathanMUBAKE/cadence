@@ -1,7 +1,7 @@
 import { uid } from "./db.js";
-import type { Services, Priority, Role } from "./services.js";
+import { localDate, type Services, type Priority, type Role } from "./services.js";
 
-const d = (offset: number) => { const x = new Date(); x.setDate(x.getDate() + offset); return x.toISOString().slice(0, 10); };
+const d = (offset: number) => { const x = new Date(); x.setDate(x.getDate() + offset); return localDate(x); };
 const ts = (offsetDays: number, hour = 10) => { const x = new Date(); x.setDate(x.getDate() + offsetDays); x.setHours(hour, 12, 0, 0); return x.toISOString(); };
 
 export async function seedIfEmpty(svc: Services) {
