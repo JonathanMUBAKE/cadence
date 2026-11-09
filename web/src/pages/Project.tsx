@@ -2,10 +2,11 @@ import { useMemo, useState } from "react";
 import { NavLink, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, BarChart3, CalendarDays, ChartNoAxesGantt, Check, ChevronDown, Ellipsis, LayoutList, Plus, Sparkles, SquareKanban, Trash2, UserPlus, Wand2, Zap } from "lucide-react";
+import { Archive, BarChart3, CalendarDays, ChartNoAxesGantt, Check, ChevronDown, Ellipsis, FileBarChart, LayoutList, Plus, Sparkles, SquareKanban, Trash2, UserPlus, Wand2, Zap } from "lucide-react";
 import { Avatar, AvatarStack, Button, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Popover, PopoverContent, PopoverTrigger, ProjectIcon, Spinner, cn } from "@/components/ui";
 import { DueChip, DuePicker } from "@/components/pickers";
 import { StatusUpdateDialog } from "@/components/dialogs";
+import { ReportsPanel } from "@/components/Reports";
 import { isActive } from "@/components/ai";
 import { useProject, useProjectTasks, useRuns, useUserMap, useUsers } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
@@ -27,6 +28,7 @@ const VIEWS = [
   { id: "calendar", label: "Calendrier", icon: CalendarDays },
   { id: "timeline", label: "Chronologie", icon: ChartNoAxesGantt },
   { id: "dashboard", label: "Tableau de bord", icon: BarChart3 },
+  { id: "reports", label: "Rapports", icon: FileBarChart },
   { id: "automations", label: "Automatisations", icon: Zap },
 ] as const;
 
@@ -109,6 +111,7 @@ export function ProjectPage() {
         {view === "calendar" && <CalendarView {...props} />}
         {view === "timeline" && <TimelineView {...props} />}
         {view === "dashboard" && <DashboardView {...props} onStatusUpdate={() => setStatusOpen(true)} />}
+        {view === "reports" && <ReportsPanel projectId={project.id} canGenerate={canEdit} agentIds={new Set(project.members.map((m) => m.user_id))} />}
         {view === "automations" && <AutomationsView {...props} />}
       </div>
       <StatusUpdateDialog projectId={project.id} open={statusOpen} onOpenChange={setStatusOpen} />

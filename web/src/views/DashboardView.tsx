@@ -106,6 +106,7 @@ function describe(kind: string, d: Record<string, unknown>) {
   const m: Record<string, string> = {
     "task.created": `a créé « ${d.title ?? "une tâche"} »`, "task.completed": d.to ? "a terminé une tâche" : "a rouvert une tâche", "comment.created": "a commenté",
     "task.assignee_id": "a réassigné une tâche", "task.section_id": "a déplacé une tâche", "task.due_on": "a changé une échéance", "project.update": "a publié un point d'avancement",
+    "report.requested": "a demandé un rapport IA", "report.generated": `a rédigé le rapport « ${d.title ?? ""} »`,
     "ai.approved": `a autorisé : ${d.summary ?? ""}`, "ai.rejected": `a refusé : ${d.summary ?? ""}`, "project.status": "a changé le statut du projet",
   };
   return m[kind] ?? kind.replace("task.", "a modifié ");

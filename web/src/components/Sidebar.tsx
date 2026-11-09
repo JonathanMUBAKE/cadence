@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { NavLink, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, CheckCircle2, ChevronsUpDown, CircleUser, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
+import { Building2, Check, CheckCircle2, ChevronsUpDown, CircleUser, FileBarChart, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
 import { Avatar, Button, Dialog, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, ProjectIcon, cn } from "./ui";
 import { useAiStatus, useApprovals, useMe, useNotifications, useProjects } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
@@ -107,6 +107,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         {link("/my-tasks", <CheckCircle2 className="size-4" />, "Mes tâches")}
         {link("/inbox", <Inbox className="size-4" />, "Boîte de réception", unread)}
         {link("/ai", <Sparkles className="size-4" />, "Coéquipiers IA", approvals?.length, true)}
+        {link("/reports", <FileBarChart className="size-4" />, "Rapports")}
         {link("/teams", <Users className="size-4" />, "Équipes")}
         {link("/org", <Network className="size-4" />, "Organisation")}
       </nav>

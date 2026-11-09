@@ -6,6 +6,8 @@
 import type { AiProvider, ContentBlock, JsonRequest, Msg, ToolResultBlock, TurnRequest, TurnResult } from "./provider.js";
 import type { Services } from "../services.js";
 import { today } from "../services.js";
+import { frNumber, type Metrics } from "../analytics.js";
+import type { ReportContent } from "./reports.js";
 
 type Parsed = { name: string; input: Record<string, unknown>; ok: boolean; out: unknown };
 
@@ -35,6 +37,48 @@ function rounds(messages: Msg[]): Parsed[][] {
 const daysLate = (d: string) => Math.round((Date.parse(today()) - Date.parse(d)) / 86400000);
 const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
 
+const ANALYSIS_WORDS = /analys|tendance|v[ée]locit|charge de travail|pr[ée]vision|indicateur|statistiques|reporting/i;
+
+function analysisLines(p: Parsed): string[] {
+  if (!p.ok || typeof p.out !== "object" || !p.out) return [`Je n'ai pas pu analyser les données : ${String(p.out)}.`];
+  const m = p.out as Metrics;
+  const name = m.scope === "project" ? m.project.name : "vos projets";
+  return [
+    `**Analyse de ${name} sur ${m.period.days} jours**`,
+    `• ${m.totals.completed_in_period} tâche(s) terminée(s), ${m.totals.created_in_period} créée(s), ${frNumber(m.totals.velocity_per_week)} par semaine en moyenne.`,
+    `• ${m.totals.open} ouverte(s), dont ${m.totals.overdue} en retard et ${m.totals.stale} inactive(s).`,
+    ...(m.scope === "project" && m.forecast.projected_end ? [`• Fin estimée au ${fmt(m.forecast.projected_end)} (confiance ${{ low: "faible", medium: "moyenne", high: "élevée" }[m.forecast.confidence]}).`] : []),
+    ...m.findings.slice(0, 4).map((f) => `• ${f.message}`),
+  ];
+}
+
+function demoReport(m: Metrics, focus: string): ReportContent {
+  const t = m.totals;
+  const high = m.findings.filter((f) => f.severity === "high");
+  const status: ReportContent["status"] = high.length >= 2 ? "off_track" : high.length || m.findings.some((f) => f.severity === "medium") ? "at_risk" : "on_track";
+  const scope = m.scope === "project" ? `${m.project.name} (${m.project.key})` : `${m.projects.length} projet(s)`;
+  const top = m.workload.find((w) => w.user_id && w.open > 0);
+  const owner = (t.overdue ? m.overdue_tasks[0]?.assignee : null) ?? top?.name ?? null;
+  return {
+    title: status === "on_track" ? `${scope} : le rythme est tenu` : `${scope} : ${t.overdue} retard(s) à résorber`,
+    status,
+    executive_summary: `Sur ${m.period.days} jours, ${t.completed_in_period} tâche(s) ont été terminées et ${t.created_in_period} créées, soit ${frNumber(t.velocity_per_week)} par semaine. ${t.open} tâche(s) restent ouvertes, dont ${t.overdue} en retard. ${t.completed_in_period >= 8 ? "L'échantillon est suffisant pour lire une tendance." : "L'échantillon reste faible : ces tendances sont à confirmer."}`,
+    focus_answer: focus ? `Mode démonstration : la question « ${focus.slice(0, 200)} » n'est pas interprétée. Les indicateurs ci-dessous restent exacts ; configurez ANTHROPIC_API_KEY pour une réponse rédigée.` : null,
+    highlights: [`${t.completed_in_period} tâche(s) terminée(s), contre ${t.previous_completed} sur la période précédente.`, ...m.findings.filter((f) => f.severity === "positive").map((f) => f.message)],
+    risks: m.findings.filter((f) => f.severity === "high" || f.severity === "medium").slice(0, 6).map((f) => ({
+      title: f.message.split(/[:(.]/)[0].trim(), severity: f.severity as "high" | "medium", evidence: f.message,
+      recommendation: f.code.startsWith("overdue") ? "Revoir les retards avec leurs responsables et fixer de nouvelles dates." : f.code === "overload" ? "Répartir une partie de la charge." : "Traiter ce point à la prochaine revue d'équipe.",
+    })),
+    team_analysis: top ? `La charge ouverte la plus élevée revient à ${top.name} (${top.open} tâche(s), dont ${top.overdue} en retard). ${t.unassigned_open} tâche(s) ouverte(s) n'ont pas de responsable.` : "Aucune charge ouverte attribuée sur cette période.",
+    recommendations: [
+      ...(t.overdue ? [{ action: `Traiter en priorité ${m.overdue_tasks.slice(0, 3).map((x) => x.key).join(", ")}`, owner, priority: "high" as const }] : []),
+      ...(t.unassigned_open ? [{ action: `Attribuer les ${t.unassigned_open} tâche(s) sans responsable`, owner: null, priority: "medium" as const }] : []),
+      { action: "Partager ce rapport à la prochaine revue d'équipe", owner: null, priority: "low" as const },
+    ],
+    next_period_focus: [t.overdue ? "Résorber les retards" : "Maintenir le rythme", t.stale ? "Relancer ou clore les tâches inactives" : "Garder les échéances à jour"],
+  };
+}
+
 export class DemoProvider implements AiProvider {
   name = "demo" as const;
   constructor(private svc: Services, private delayMs = 450) {}
@@ -60,6 +104,10 @@ export class DemoProvider implements AiProvider {
   private async teammate(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
     const { taskId, projectId } = req.hint;
     const task = taskId ? await this.svc.getTask(req.hint.actorId, taskId) : null;
+    if (task && ANALYSIS_WORDS.test(`${task.title} ${task.description}`)) {
+      if (r.length === 0) return this.tools(call("analyze_data", { project_id: projectId }));
+      return this.say(analysisLines(r[0][0]).join("\n"), req);
+    }
     if (r.length === 0) {
       return this.tools(call("get_task", { task: task?.key }), call("search_tasks", { project_id: projectId, overdue: true, limit: 10 }));
     }
@@ -98,6 +146,11 @@ export class DemoProvider implements AiProvider {
   // ------------------------------------------------------------ @mention dans un commentaire
   private async mention(req: TurnRequest, r: Parsed[][]): Promise<TurnResult> {
     const task = req.hint.taskId ? await this.svc.getTask(req.hint.actorId, req.hint.taskId) : null;
+    const asked = String(req.messages[0]?.content ?? "").match(/mentionné dans ce commentaire :\n« ([\s\S]*) »/)?.[1] ?? "";
+    if (ANALYSIS_WORDS.test(asked)) {
+      if (r.length === 0) return this.tools(call("analyze_data", { project_id: req.hint.projectId }));
+      return this.say(analysisLines(r[0][0]).join("\n"), req);
+    }
     if (r.length === 0 && task) return this.tools(call("get_task", { task: task.key }));
     if (!task) return this.say("Je n'ai pas trouvé la tâche concernée.", req);
     const done = task.subtasks.filter((s) => s.completed).length;
@@ -122,6 +175,7 @@ export class DemoProvider implements AiProvider {
     if (r.length === 0) {
       const create = q.match(/(?:crée|créer|ajoute|ajouter)\s+(?:une\s+)?t[âa]che\s*(?:[:«"]\s*)?(.+?)["»]?$/i);
       if (create && pid) return this.tools(call("create_task", { project_id: pid, title: create[1].replace(/^["«\s]+|["»\s]+$/g, "").replace(/^./, (c) => c.toUpperCase()) }));
+      if (ANALYSIS_WORDS.test(q)) return this.tools(call("analyze_data", pid ? { project_id: pid } : {}));
       if (/retard|overdue|en retard/.test(q)) return this.tools(call("search_tasks", { project_id: pid, overdue: true }));
       if (/\bmes\b|\bmoi\b|ma semaine|mon travail/.test(q)) return this.tools(call("search_tasks", { assignee: me, completed: false }));
       if (/semaine|bientôt|échéance|cette semaine/.test(q)) { const d = new Date(); d.setDate(d.getDate() + 7); return this.tools(call("search_tasks", { project_id: pid, completed: false, due_before: d.toISOString().slice(0, 10) })); }
@@ -147,6 +201,8 @@ export class DemoProvider implements AiProvider {
       } else if (p.name === "list_projects") {
         const ps = p.out as { name: string; tasks: number; done: number; overdue: number }[];
         lines.push("Vos projets :", ...ps.map((x) => `• ${x.name} — ${x.done}/${x.tasks} terminées${x.overdue ? `, ${x.overdue} en retard` : ""}`));
+      } else if (p.name === "analyze_data") {
+        lines.push(...analysisLines(p));
       } else if (p.name === "create_task") {
         lines.push(`C'est fait : tâche ${(p.out as { created: { task: string; title: string } }).created.task} « ${(p.out as { created: { title: string } }).created.title} » créée.`);
       }
@@ -202,6 +258,8 @@ export class DemoProvider implements AiProvider {
         const title = String(d.title ?? "");
         return { description: `**Objectif**\n${title}.\n\n**Contexte**\n${String(d.description || "À préciser.")}\n\n**Critères de réussite**\n- Le livrable est validé par le responsable du projet\n- Les personnes concernées sont informées\n\n**Points d'attention**\n- Vérifier les dépendances avant de commencer` } as T;
       }
+      case "report":
+        return demoReport(d.metrics as Metrics, String(d.focus ?? "")) as T;
       default:
         throw new Error(`Action IA inconnue : ${req.hint.kind}`);
     }

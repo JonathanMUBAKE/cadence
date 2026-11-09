@@ -87,5 +87,39 @@ export interface AiRule {
   id: string; project_id: string; name: string; trigger: "task_created" | "task_moved" | "task_overdue"; section_id: string | null;
   agent_id: string; instructions: string; auto_approve: boolean; enabled: boolean; created_by: string | null; created_at: string;
 }
+export type Level = "high" | "medium" | "low";
+export interface Finding { severity: Level | "positive"; code: string; message: string }
+export interface TaskRef { key: string; title: string; assignee: string | null; priority: Priority; due_on: string | null; days: number }
+export interface WorkloadEntry { user_id: string | null; name: string; is_ai: boolean; open: number; overdue: number; high_priority_open: number; completed_in_period: number }
+interface MetricsBase {
+  period: { from: string; to: string; days: number };
+  totals: {
+    total: number; open: number; done: number; completion_rate: number; completed_in_period: number; created_in_period: number; previous_completed: number; velocity_per_week: number;
+    overdue: number; avg_days_late: number | null; max_days_late: number | null; due_next_7_days: number; unassigned_open: number; no_due_open: number; stale: number;
+    on_time_rate: number | null; on_time_sample: number; cycle_median_days: number | null; cycle_p85_days: number | null; cycle_sample: number;
+  };
+  weekly: { from: string; to: string; completed: number; created: number }[];
+  workload: WorkloadEntry[]; overdue_tasks: TaskRef[]; stale_tasks: TaskRef[]; findings: Finding[];
+}
+export interface ProjectMetrics extends MetricsBase {
+  scope: "project"; project: { id: string; key: string; name: string; status: ProjectStatus; due_on: string | null };
+  sections: { section: string; open: number; overdue: number; avg_age_days: number | null }[];
+  forecast: { remaining: number; projected_end: string | null; due_on: string | null; margin_days: number | null; confidence: "low" | "medium" | "high" };
+}
+export interface PortfolioMetrics extends MetricsBase {
+  scope: "portfolio"; excluded_projects: number;
+  projects: { project_id: string; key: string; name: string; status: ProjectStatus; due_on: string | null; open: number; done: number; overdue: number; completed_in_period: number; velocity_per_week: number; margin_days: number | null; health: "good" | "watch" | "critical" }[];
+}
+export type ReportMetrics = ProjectMetrics | PortfolioMetrics;
+export interface ReportContent {
+  title: string; status: "on_track" | "at_risk" | "off_track"; executive_summary: string; focus_answer: string | null; highlights: string[];
+  risks: { title: string; severity: Level; evidence: string; recommendation: string }[];
+  team_analysis: string; recommendations: { action: string; owner: string | null; priority: Level }[]; next_period_focus: string[];
+}
+export interface ReportSummary {
+  id: string; project_id: string | null; scope: "project" | "portfolio"; agent_id: string; created_by: string; period_days: number; focus: string;
+  status: "generating" | "ready" | "failed"; provider: string; error: string | null; created_at: string; finished_at: string | null; title: string | null; health: "on_track" | "at_risk" | "off_track" | null;
+}
+export interface Report extends Omit<ReportSummary, "title" | "health"> { metrics: ReportMetrics; content: ReportContent | null }
 export interface StatusProposal { status: "on_track" | "at_risk" | "off_track"; headline: string; summary: string; risks: string[]; next_steps: string[] }
 export interface ParsedTask { title: string; description: string; assignee_id: string | null; due_on: string | null; priority: Priority; section_id: string | null }

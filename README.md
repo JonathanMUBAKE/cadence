@@ -27,6 +27,8 @@ Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asa
   - rédiger un point d'avancement de projet ;
   - transformer des notes en vrac en tâches, avec relecture avant création.
 - **Mémoire** rattachée aux projets, et **journal** complet de chaque intervention.
+- **Analyse de données** : les coéquipiers et l'assistant disposent de l'outil `analyze_data` (vélocité, tendance hebdomadaire, durée de traitement, respect des échéances, retards, tâches inactives, charge par personne, goulots, prévision de fin). Les chiffres sont calculés par Cadence, avec les droits de l'agent ; l'IA les interprète sans les produire.
+- **Rapports IA** : un coéquipier rédige un rapport sur un projet (onglet **Rapports**, partagé avec les membres) ou sur le portefeuille (page **Rapports**, réservée à son auteur), pour une période de 7, 30 ou 90 jours et avec une question facultative. Chaque rapport garde l'instantané de ses indicateurs et se télécharge en Markdown.
 
 **Organisation du travail** (inspirée d'Asana, Jira, Confluence et Microsoft Project)
 - **Organisations multiples**, étanches entre elles : on passe de l'une à l'autre en un clic.
@@ -92,7 +94,7 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 ## Tests
 
 ```bash
-npm test          # 51 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
+npm test          # 65 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos, analyse de données, rapports (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 
@@ -101,8 +103,9 @@ npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 server/src
   db.ts             accès PostgreSQL (pg pour Supabase, PGlite embarqué) et migrations
-  ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS, 003 photos et messagerie)
+  ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS, 003 photos et messagerie, 004 rapports)
   services.ts       logique métier : organisations, entités, équipes, projets, tâches, droits effectifs
+  analytics.ts      indicateurs déterministes par projet et par portefeuille
   bus.ts            événements métier → temps réel, déclencheurs IA et e-mails
   mail.ts           SMTP par organisation, adresses de service par niveau, envoi des notifications
   crypto.ts         chiffrement des secrets stockés en base
@@ -110,6 +113,7 @@ server/src
   ai/tools.ts       outils exposés au modèle (lecture / écriture), exécutés avec les droits de l'agent
   ai/engine.ts      boucle d'agent, checkpoints, déclencheurs, règles, actions intelligentes
   ai/provider.ts    Claude (SDK Anthropic, repli automatique en cas de refus)
+  ai/reports.ts     rédaction, droits et cycle de vie des rapports IA
   ai/demo.ts        fournisseur de démonstration sans clé
 web/src
   pages/            Accueil, Mes tâches, Boîte de réception, Coéquipiers IA, Projet

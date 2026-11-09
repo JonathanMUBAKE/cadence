@@ -10,6 +10,7 @@ import { MailService } from "./mail.js";
 import { AiEngine } from "./ai/engine.js";
 import { AnthropicProvider, MODEL, type AiProvider } from "./ai/provider.js";
 import { DemoProvider } from "./ai/demo.js";
+import { ReportService } from "./ai/reports.js";
 import { seedIfEmpty } from "./seed.js";
 
 export interface AppOptions {
@@ -34,10 +35,12 @@ export async function buildApp(opts: AppOptions = {}) {
   const detach = ai.attach();
   const mail = new MailService(db, svc, bus);
   const detachMail = mail.attach();
+  const reports = new ReportService(svc, bus, provider, ai.tools.analytics);
+  await reports.init();
 
   const app = Fastify({ logger: opts.logger ?? false });
   await app.register(cookie, { secret: process.env.COOKIE_SECRET || "cadence-dev-secret-change-me" });
-  app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
+  app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await reports.shutdown(); await mail.shutdown(); await db.close(); });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
@@ -251,6 +254,16 @@ export async function buildApp(opts: AppOptions = {}) {
     }).parse(req.body), project_id: req.params.id }));
     r.delete<{ Params: { id: string; ruleId: string } }>("/api/projects/:id/ai/rules/:ruleId", async (req) => { await ai.deleteRule(me(req), req.params.ruleId); return { ok: true }; });
 
+    // ---------------------------------------------------------------- rapports IA
+    const ReportBody = z.object({ agent_id: z.string(), period_days: z.number().int().min(7).max(365).default(30), focus: z.string().max(1000).optional() });
+    const createReport = (req: FastifyRequest, projectId: string | null) => { const b = ReportBody.parse(req.body); return reports.create(me(req), org(req), { projectId, agentId: b.agent_id, periodDays: b.period_days, focus: b.focus }); };
+    r.get("/api/reports", async (req) => reports.list(me(req), org(req), null));
+    r.post("/api/reports", async (req) => createReport(req, null));
+    r.get<{ Params: { id: string } }>("/api/projects/:id/reports", async (req) => reports.list(me(req), org(req), req.params.id));
+    r.post<{ Params: { id: string } }>("/api/projects/:id/reports", async (req) => createReport(req, req.params.id));
+    r.get<{ Params: { id: string } }>("/api/reports/:id", async (req) => reports.get(me(req), req.params.id));
+    r.delete<{ Params: { id: string } }>("/api/reports/:id", async (req) => { await reports.delete(me(req), req.params.id); return { ok: true }; });
+
     // ---------------------------------------------------------------- temps réel (SSE)
     r.get("/api/events", (req, reply) => {
       const userId = me(req);
@@ -271,6 +284,10 @@ export async function buildApp(opts: AppOptions = {}) {
     if (e.type === "ai.delta") return e.userId === userId ? { type: "ai.delta", runId: e.runId, delta: e.delta } : null;
     if (e.type === "org.changed") return (await svc.orgRole(userId, e.orgId)) ? { type: e.type, orgId: e.orgId } : null;
     if (e.type === "project.deleted") return e.members.includes(userId) ? { type: e.type, projectId: e.projectId } : null;
+    if (e.type === "report.changed") {
+      const visible = e.projectId ? !!(await svc.projectRole(userId, e.projectId)) : e.userId === userId;
+      return visible ? { type: e.type, reportId: e.reportId, projectId: e.projectId } : null;
+    }
     if (e.type === "ai.run" || e.type === "ai.step" || e.type === "ai.approval") {
       const run = await db.one<{ kind: string; requested_by: string | null }>("SELECT kind, requested_by FROM ai_runs WHERE id = $1", [e.runId]);
       if (run?.kind === "assistant") return run.requested_by === userId ? { type: e.type, runId: e.runId } : null;
@@ -290,5 +307,5 @@ export async function buildApp(opts: AppOptions = {}) {
     });
   }
 
-  return { app, db, svc, ai, bus, provider, mail };
+  return { app, db, svc, ai, bus, provider, mail, reports };
 }

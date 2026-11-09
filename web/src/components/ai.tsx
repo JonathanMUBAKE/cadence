@@ -35,6 +35,7 @@ export function stepLabel(s: AiStep): string {
     case "get_task": return `Lecture de la tâche ${i.task}`;
     case "get_project": return "Lecture du projet";
     case "list_projects": return "Tour des projets";
+    case "analyze_data": return "Analyse des données";
     case "create_task": return i.parent ? `Sous-tâche « ${i.title} »` : `Nouvelle tâche « ${i.title} »`;
     case "update_task": return `Mise à jour de ${i.task}`;
     case "add_comment": return `Commentaire sur ${i.task}`;

@@ -13,7 +13,8 @@ export type DomainEvent =
   | { type: "ai.run"; runId: string; projectId: string | null; taskId: string | null; agentId: string; status: string }
   | { type: "ai.step"; runId: string; projectId: string | null; taskId: string | null }
   | { type: "ai.delta"; runId: string; userId: string; delta: string }
-  | { type: "ai.approval"; approvalId: string; runId: string; projectId: string | null; taskId: string | null };
+  | { type: "ai.approval"; approvalId: string; runId: string; projectId: string | null; taskId: string | null }
+  | { type: "report.changed"; reportId: string; orgId: string; projectId: string | null; userId: string };
 
 export class Bus {
   private ee = new EventEmitter();

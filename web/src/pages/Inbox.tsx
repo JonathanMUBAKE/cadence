@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AtSign, BellRing, CheckCheck, CircleCheck, FileText, MessageSquare, Sparkles, UserPlus } from "lucide-react";
 import { Avatar, Button, Empty, cn } from "@/components/ui";
@@ -8,16 +9,21 @@ import { ago } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { Notification } from "@/lib/types";
 
-const KIND_ICON: Record<string, typeof AtSign> = { mention: AtSign, comment: MessageSquare, assigned: UserPlus, "task.completed": CircleCheck, approval: Sparkles, "project.update": FileText };
+const KIND_ICON: Record<string, typeof AtSign> = { mention: AtSign, comment: MessageSquare, assigned: UserPlus, "task.completed": CircleCheck, approval: Sparkles, "project.update": FileText, report: FileText };
 
 export function InboxPage() {
   const { data: notifs } = useNotifications();
   const { data: approvals } = useApprovals();
   const users = useUserMap();
   const shell = useShell();
+  const nav = useNavigate();
   const qc = useQueryClient();
   const read = async (ids: string[] | "all") => { await api.post("/api/notifications/read", ids === "all" ? { all: true } : { ids }); qc.invalidateQueries({ queryKey: ["notifications"] }); };
-  const open = (n: Notification) => { if (!n.read) read([n.id]); if (n.task_id) shell.openTask(n.task_id); };
+  const open = (n: Notification) => {
+    if (!n.read) read([n.id]);
+    if (n.kind === "report") nav(n.project_id ? `/projects/${n.project_id}/reports` : "/reports");
+    else if (n.task_id) shell.openTask(n.task_id);
+  };
   const list = (notifs ?? []).filter((n) => n.kind !== "approval" || !n.read);
   const unread = list.filter((n) => !n.read).length;
 

@@ -3,7 +3,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/re
 import { toast } from "sonner";
 import { api } from "./api";
 import type {
-  AiApproval, AiRule, AiRun, AiRunDetail, Activity, EmailLogEntry, MailConfig, Me, ServiceAddress, Notification, OrgUnit, OrgUser, ProjectDetail, ProjectSummary, Stats, Task, TaskDetail, Team, TeamDetail, User,
+  AiApproval, AiRule, AiRun, AiRunDetail, Activity, EmailLogEntry, MailConfig, Me, ServiceAddress, Notification, OrgUnit, OrgUser, ProjectDetail, ProjectSummary, Report, ReportSummary, Stats, Task, TaskDetail, Team, TeamDetail, User,
 } from "./types";
 
 export const queryClient = new QueryClient({
@@ -46,6 +46,8 @@ export const useRuns = (f: { taskId?: string; projectId?: string }) => useQuery(
   queryFn: () => api.get<AiRun[]>(`/api/ai/runs?${new URLSearchParams({ ...(f.taskId ? { task_id: f.taskId } : {}), ...(f.projectId ? { project_id: f.projectId } : {}) })}`),
 });
 export const useRun = (id?: string | null) => useQuery({ queryKey: ["run", id], queryFn: () => api.get<AiRunDetail>(`/api/ai/runs/${id}`), enabled: !!id });
+export const useReports = (projectId: string | null) => useQuery({ queryKey: ["reports", projectId], queryFn: () => api.get<ReportSummary[]>(projectId ? `/api/projects/${projectId}/reports` : "/api/reports") });
+export const useReport = (id?: string | null) => useQuery({ queryKey: ["report", id], queryFn: () => api.get<Report>(`/api/reports/${id}`), enabled: !!id });
 export const useRules = (projectId?: string) => useQuery({ queryKey: ["rules", projectId], queryFn: () => api.get<AiRule[]>(`/api/projects/${projectId}/ai/rules`), enabled: !!projectId });
 
 // ---------------------------------------------------------------- écritures
@@ -115,7 +117,7 @@ function invalidateTask(qc: QueryClient, id: string) {
 }
 
 // ---------------------------------------------------------------- temps réel
-type Live = { type: string; projectId?: string; taskId?: string | null; runId?: string; delta?: string; actorId?: string };
+type Live = { type: string; projectId?: string | null; taskId?: string | null; runId?: string; reportId?: string; delta?: string; actorId?: string };
 const deltaListeners = new Set<(runId: string, delta: string) => void>();
 export const onAiDelta = (fn: (runId: string, delta: string) => void) => { deltaListeners.add(fn); return () => { deltaListeners.delete(fn); }; };
 
@@ -140,6 +142,7 @@ export function useLiveUpdates(enabled: boolean) {
       if (e.type === "ai.delta") { deltaListeners.forEach((fn) => fn(e.runId!, e.delta!)); return; }
       if (e.type === "notification") return queue(["notifications"]);
       if (e.type === "org.changed") return queue(["units"], ["teams"], ["team"], ["users"], ["projects"], ["me"]);
+      if (e.type === "report.changed") return queue(["reports"], ["report", e.reportId], ["activity"]);
       if (e.type.startsWith("ai.")) {
         queue(["runs"], ["run", e.runId], ["approvals"]);
         if (e.taskId) queue(["task", e.taskId]);

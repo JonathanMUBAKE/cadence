@@ -13,6 +13,7 @@ type Msg = { role: "user" | "assistant"; content: string; error?: boolean };
 const SUGGESTIONS = [
   "Qu'est-ce qui est en retard, et pourquoi ?",
   "Résume l'avancement du projet",
+  "Analyse la vélocité et la charge de travail",
   "Quelles sont mes tâches ouvertes ?",
   "Quelles tâches urgentes restent à faire ?",
   "Crée une tâche Préparer la démo client",

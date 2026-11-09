@@ -1,6 +1,7 @@
 import type { Services, Task, Priority } from "../services.js";
 import { uid } from "../db.js";
 import { badRequest } from "../services.js";
+import { Analytics } from "../analytics.js";
 
 export interface ToolDef {
   name: string;
@@ -42,6 +43,15 @@ export const READ_TOOLS: ToolDef[] = [
     name: "get_task",
     description: "Détail complet d'une tâche : description, section, assigné, échéance, sous-tâches et commentaires récents.",
     input_schema: { type: "object", properties: { task: taskRef }, required: ["task"], additionalProperties: false },
+  },
+  {
+    name: "analyze_data",
+    description: "Analyse chiffrée d'un projet, ou de tous les projets accessibles si project_id est absent : vélocité, tendance hebdomadaire, durée de traitement, respect des échéances, retards, tâches inactives, charge par personne, goulots par section, prévision de fin et constats. À utiliser pour toute question de tendance, de charge, de risque ou de prévision : les chiffres sont calculés par Cadence, ne les recalcule pas à partir de listes de tâches.",
+    input_schema: {
+      type: "object",
+      properties: { project_id: { type: "string" }, period_days: { type: "integer", minimum: 7, maximum: 365, description: "Période analysée en jours (30 par défaut)" } },
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -98,7 +108,8 @@ export interface ToolCtx { actorId: string; orgId: string }
 const str = (v: unknown) => (v === undefined || v === null || v === "" ? undefined : String(v));
 
 export class ToolRunner {
-  constructor(private svc: Services) {}
+  readonly analytics: Analytics;
+  constructor(private svc: Services) { this.analytics = new Analytics(svc); }
 
   async resolveUser(orgId: string, ref: unknown): Promise<string | undefined> {
     const r = str(ref)?.trim().replace(/^@/, "");
@@ -169,6 +180,10 @@ export class ToolRunner {
         const comments = [];
         for (const c of t.comments.slice(-8)) comments.push({ author: (await s.user(c.author_id)).name, body: c.body.slice(0, 500), at: c.created_at.slice(0, 16) });
         return { ...(await this.brief(t)), description: t.description, project: t.project.name, parent: t.parent ? `${t.parent.key} ${t.parent.title}` : null, subtasks, comments };
+      }
+      case "analyze_data": {
+        const period = Number(input.period_days) || 30;
+        return input.project_id ? this.analytics.project(actorId, await this.resolveProject(ctx, input.project_id), period) : this.analytics.portfolio(actorId, ctx.orgId, period);
       }
       case "create_task": {
         const projectId = await this.resolveProject(ctx, input.project_id);

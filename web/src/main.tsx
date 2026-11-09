@@ -15,6 +15,7 @@ import { AgentsPage } from "./pages/Agents";
 import { ProjectPage } from "./pages/Project";
 import { OrganizationPage } from "./pages/Organization";
 import { TeamPage, TeamsPage } from "./pages/Teams";
+import { ReportsPage } from "./pages/Reports";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -28,6 +29,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="my-tasks" element={<MyTasksPage />} />
               <Route path="inbox" element={<InboxPage />} />
               <Route path="ai" element={<AgentsPage />} />
+              <Route path="reports" element={<ReportsPage />} />
               <Route path="org" element={<OrganizationPage />} />
               <Route path="teams" element={<TeamsPage />} />
               <Route path="teams/:id" element={<TeamPage />} />

@@ -22,6 +22,8 @@ export interface AiRule {
 }
 
 const MAX_ROUNDS = 12;
+/** Assez large pour une recherche complète ou une analyse : un JSON coupé est inexploitable. */
+const TOOL_RESULT_MAX = 24_000;
 const trim = (v: unknown, n = 4000) => { const s = typeof v === "string" ? v : JSON.stringify(v); return s.length > n ? s.slice(0, n) + "…" : s; };
 const parse = (s: unknown) => { if (typeof s !== "string") return s; try { return JSON.parse(s); } catch { return s; } };
 
@@ -234,7 +236,7 @@ export class AiEngine {
         try {
           const out = await this.tools.execute(o.ctx, b.name, b.name === "add_comment" ? { ...input, __run_id: runId } : input);
           await this.updateStep(stepId, "ok", out);
-          results.push({ type: "tool_result", tool_use_id: b.id, content: trim(out) });
+          results.push({ type: "tool_result", tool_use_id: b.id, content: trim(out, TOOL_RESULT_MAX) });
         } catch (err) {
           const msg = (err as Error).message;
           await this.updateStep(stepId, "error", msg);
@@ -499,7 +501,7 @@ export class AiEngine {
 
 class CancelledError extends Error {}
 
-function describeError(err: unknown): string {
+export function describeError(err: unknown): string {
   const e = err as { status?: number; message?: string };
   if (e?.status === 401) return "Clé API Anthropic invalide ou absente.";
   if (e?.status === 429) return "Limite de requêtes atteinte côté Claude. Réessayez dans un moment.";
@@ -518,6 +520,7 @@ function teammateSystem(agent: User) {
     "- Appuie-toi uniquement sur ce que renvoient tes outils. Si un accès est refusé, dis-le, n'invente rien.",
     "- Désigne les tâches par leur clé (par exemple APP-12) et les projets par leur clé (APP).",
     "- Traduis chaque besoin en filtres précis dans search_tasks plutôt que de tout lister.",
+    "- Pour analyser des données (tendances, charge, retards, risques, prévisions), appelle analyze_data et cite ses chiffres sans les recalculer. Signale quand l'échantillon est trop faible pour conclure.",
     "- Regroupe dans un même tour tous les appels d'outils indépendants (par exemple plusieurs commentaires de relance).",
     "- Chaque écriture (création, modification, commentaire) est soumise à la validation d'un humain. Si une action est refusée, n'insiste pas et adapte ton plan.",
     "- Pour mentionner quelqu'un dans un commentaire, écris @Prénom.",
@@ -536,6 +539,7 @@ function assistantSystem(user: User, projects: string, current: string | null) {
     "Méthode :",
     "- Appuie-toi uniquement sur ce que renvoient tes outils ; si un accès est refusé, dis-le simplement.",
     "- Traduis la question en filtres précis pour search_tasks. Regroupe les appels indépendants dans un même tour.",
+    "- Pour une question d'analyse (tendance, charge, risque, prévision, comparaison de projets), appelle analyze_data et cite ses chiffres sans les recalculer.",
     "- Toute écriture est validée par l'utilisateur avant exécution ; si elle est refusée, n'insiste pas.",
     "- Réponds en français, de façon concise et concrète, en citant les clés des tâches (APP-12). Utilise des puces quand il y a une liste.",
   ].filter(Boolean).join("\n");
