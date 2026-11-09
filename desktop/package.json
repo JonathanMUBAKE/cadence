@@ -1,0 +1,35 @@
+{
+  "name": "cadence-desktop",
+  "productName": "Cadence",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cadence, application de bureau : gestion de projet avec IA embarquée",
+  "author": "Cadence",
+  "main": "main.cjs",
+  "scripts": {
+    "prepare-server": "node prepare-server.mjs",
+    "start": "npm run prepare-server && electron .",
+    "dist": "npm run prepare-server && electron-builder",
+    "dist:win": "npm run prepare-server && electron-builder --win",
+    "dist:mac": "npm run prepare-server && electron-builder --mac",
+    "dist:linux": "npm run prepare-server && electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "38.8.6",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "app.cadence.desktop",
+    "productName": "Cadence",
+    "copyright": "Cadence",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["main.cjs", "splash.html", "package.json"],
+    "extraResources": [{ "from": "build/app-server", "to": "app-server" }],
+    "asar": true,
+    "publish": null,
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "zip", "arch": ["x64"] }], "icon": "build/icon.png" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "shortcutName": "Cadence", "language": "1036" },
+    "mac": { "target": ["dmg"], "category": "public.app-category.productivity", "icon": "build/icon.png" },
+    "linux": { "target": ["AppImage", "deb"], "category": "Office", "icon": "build/icon.png", "maintainer": "Cadence <contact@cadence.app>" }
+  }
+}
