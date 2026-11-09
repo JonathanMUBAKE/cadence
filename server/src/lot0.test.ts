@@ -14,14 +14,18 @@ async function api(user: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DEL
   const res = await ctx.app.inject({ method, url, payload: payload as never, headers: { cookie: cookies[user] } });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
-const projectId = async (name: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
-const taskId = async (title: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM tasks WHERE title = $1", [title]))!.id;
+const projectId = async (name: string) =>
+  (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
+const taskId = async (title: string) =>
+  (await ctx.db.one<{ id: string }>("SELECT id FROM tasks WHERE title = $1", [title]))!.id;
 
 beforeEach(async () => {
   ctx = await buildApp({ provider: "demo", demoDelayMs: 0 });
   for (const u of ["u_alice", "u_karim", "u_hugo", "u_ines"]) await login(u);
 });
-afterEach(async () => { await ctx.app.close(); });
+afterEach(async () => {
+  await ctx.app.close();
+});
 
 describe("migrations de la base", () => {
   it("applique les migrations une seule fois et rouvre une base existante sans erreur", async () => {
@@ -36,7 +40,12 @@ describe("migrations de la base", () => {
   it("renvoie les dates calendaires au format AAAA-MM-JJ et annule une transaction en erreur", async () => {
     const db = await openDb();
     await db.query("INSERT INTO organizations (id, name, slug) VALUES ('o1','Test','test')");
-    await expect(db.tx(async (q) => { await q.query("INSERT INTO organizations (id, name, slug) VALUES ('o2','T2','t2')"); throw new Error("boum"); })).rejects.toThrow("boum");
+    await expect(
+      db.tx(async (q) => {
+        await q.query("INSERT INTO organizations (id, name, slug) VALUES ('o2','T2','t2')");
+        throw new Error("boum");
+      }),
+    ).rejects.toThrow("boum");
     expect(await db.one("SELECT id FROM organizations WHERE id = 'o2'")).toBeUndefined();
     const r = await db.one<{ d: string }>("SELECT '2030-02-01'::date AS d");
     expect(r!.d).toBe("2030-02-01");
@@ -50,7 +59,10 @@ describe("dates de début", () => {
     const res = await api("u_alice", "PATCH", `/api/tasks/${id}`, { start_on: "2030-02-10", due_on: "2030-02-01" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/date de début/);
-    expect((await api("u_alice", "PATCH", `/api/tasks/${id}`, { start_on: "2030-01-25", due_on: "2030-02-01" })).body.start_on).toBe("2030-01-25");
+    expect(
+      (await api("u_alice", "PATCH", `/api/tasks/${id}`, { start_on: "2030-01-25", due_on: "2030-02-01" })).body
+        .start_on,
+    ).toBe("2030-01-25");
   });
 });
 
@@ -81,14 +93,18 @@ describe("projets : archivage et suppression", () => {
   });
   it("seul un administrateur peut supprimer un projet, avec confirmation du nom", async () => {
     const pid = await projectId("Campagne de lancement");
-    expect((await api("u_ines", "DELETE", `/api/projects/${pid}`, { confirm: "Campagne de lancement" })).status).toBe(403);
+    expect((await api("u_ines", "DELETE", `/api/projects/${pid}`, { confirm: "Campagne de lancement" })).status).toBe(
+      403,
+    );
     const wrong = await api("u_hugo", "DELETE", `/api/projects/${pid}`, { confirm: "mauvais nom" });
     expect(wrong.status).toBe(400);
     expect(wrong.body.error).toMatch(/nom exact/);
   });
   it("l'administrateur du projet le supprime avec ses tâches", async () => {
     const pid = await projectId("RH");
-    expect((await api("u_alice", "DELETE", `/api/projects/${pid}`, { confirm: "RH · Recrutements 2027" })).status).toBe(200);
+    expect((await api("u_alice", "DELETE", `/api/projects/${pid}`, { confirm: "RH · Recrutements 2027" })).status).toBe(
+      200,
+    );
     expect(await ctx.db.one("SELECT id FROM tasks WHERE project_id = $1", [pid])).toBeUndefined();
   });
 });
@@ -106,12 +122,16 @@ describe("tâches : dupliquer et déplacer", () => {
     const moved = (await api("u_alice", "POST", `/api/tasks/${id}/move-project`, { project_id: dest })).body;
     expect(moved.project_id).toBe(dest);
     expect(moved.assignee_id).toBeNull();
-    const destSections = (await api("u_alice", "GET", `/api/projects/${dest}`)).body.sections.map((s: { id: string }) => s.id);
+    const destSections = (await api("u_alice", "GET", `/api/projects/${dest}`)).body.sections.map(
+      (s: { id: string }) => s.id,
+    );
     expect(destSections).toContain(moved.section_id);
   });
   it("refuse le déplacement vers un projet où l'on n'est pas éditeur", async () => {
     const id = await taskId("Tests de non-régression iOS");
-    const res = await api("u_karim", "POST", `/api/tasks/${id}/move-project`, { project_id: await projectId("Refonte du site") });
+    const res = await api("u_karim", "POST", `/api/tasks/${id}/move-project`, {
+      project_id: await projectId("Refonte du site"),
+    });
     expect(res.status).toBe(403);
   });
 });
@@ -130,6 +150,8 @@ describe("commentaires : modifier et supprimer", () => {
     const c = (await api("u_karim", "POST", `/api/tasks/${id}/comments`, { body: "À supprimer" })).body;
     expect((await api("u_ines", "DELETE", `/api/comments/${c.id}`)).status).toBe(403);
     expect((await api("u_alice", "DELETE", `/api/comments/${c.id}`)).status).toBe(200);
-    expect((await api("u_alice", "GET", `/api/tasks/${id}`)).body.comments.some((x: { id: string }) => x.id === c.id)).toBe(false);
+    expect(
+      (await api("u_alice", "GET", `/api/tasks/${id}`)).body.comments.some((x: { id: string }) => x.id === c.id),
+    ).toBe(false);
   });
 });

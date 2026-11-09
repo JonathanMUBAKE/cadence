@@ -1,6 +1,20 @@
 /** Type réel d'un fichier, établi d'après son contenu : l'extension seule ne prouve rien. */
-export type FileKind = "image" | "pdf" | "word" | "excel" | "powerpoint" | "zip" | "legacy-word" | "legacy-excel" | "legacy-powerpoint" | "text" | "csv";
-export interface FileType { mime: string; kind: FileKind }
+export type FileKind =
+  | "image"
+  | "pdf"
+  | "word"
+  | "excel"
+  | "powerpoint"
+  | "zip"
+  | "legacy-word"
+  | "legacy-excel"
+  | "legacy-powerpoint"
+  | "text"
+  | "csv";
+export interface FileType {
+  mime: string;
+  kind: FileKind;
+}
 
 const OOXML: Record<string, FileType> = {
   docx: { mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", kind: "word" },
@@ -13,8 +27,11 @@ const LEGACY: Record<string, FileType> = {
   ppt: { mime: "application/vnd.ms-powerpoint", kind: "legacy-powerpoint" },
 };
 const TEXT: Record<string, FileType> = {
-  txt: { mime: "text/plain; charset=utf-8", kind: "text" }, md: { mime: "text/plain; charset=utf-8", kind: "text" }, log: { mime: "text/plain; charset=utf-8", kind: "text" },
-  json: { mime: "application/json", kind: "text" }, csv: { mime: "text/csv; charset=utf-8", kind: "csv" },
+  txt: { mime: "text/plain; charset=utf-8", kind: "text" },
+  md: { mime: "text/plain; charset=utf-8", kind: "text" },
+  log: { mime: "text/plain; charset=utf-8", kind: "text" },
+  json: { mime: "application/json", kind: "text" },
+  csv: { mime: "text/csv; charset=utf-8", kind: "csv" },
 };
 
 const starts = (b: Buffer, bytes: number[]) => bytes.every((v, i) => b[i] === v);

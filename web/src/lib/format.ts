@@ -3,16 +3,23 @@ import { fr } from "date-fns/locale";
 import type { Priority, ProjectStatus } from "./types";
 
 export const todayIso = () => format(new Date(), "yyyy-MM-dd");
-export const isoIn = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return format(d, "yyyy-MM-dd"); };
+export const isoIn = (days: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return format(d, "yyyy-MM-dd");
+};
 const asDate = (iso: string) => (iso.length === 10 ? parseISO(iso + "T12:00:00") : parseISO(iso));
 
-export function dueLabel(iso: string | null): { label: string; tone: "danger" | "warning" | "muted" | "success" } | null {
+export function dueLabel(
+  iso: string | null,
+): { label: string; tone: "danger" | "warning" | "muted" | "success" } | null {
   if (!iso) return null;
   const diff = differenceInCalendarDays(asDate(iso), new Date());
   if (diff < 0) return { label: diff === -1 ? "Hier" : format(asDate(iso), "d MMM", { locale: fr }), tone: "danger" };
   if (diff === 0) return { label: "Aujourd'hui", tone: "warning" };
   if (diff === 1) return { label: "Demain", tone: "warning" };
-  if (diff < 7) return { label: format(asDate(iso), "EEEE", { locale: fr }).replace(/^./, (c) => c.toUpperCase()), tone: "muted" };
+  if (diff < 7)
+    return { label: format(asDate(iso), "EEEE", { locale: fr }).replace(/^./, (c) => c.toUpperCase()), tone: "muted" };
   return { label: format(asDate(iso), "d MMM", { locale: fr }), tone: "muted" };
 }
 export const longDate = (iso: string) => format(asDate(iso), "EEEE d MMMM yyyy", { locale: fr });
@@ -40,5 +47,8 @@ export const STATUS: Record<ProjectStatus, { label: string; color: string; soft:
   done: { label: "Terminé", color: "var(--info)", soft: "var(--info-soft)" },
 };
 
-export const greeting = () => { const h = new Date().getHours(); return h < 5 ? "Bonsoir" : h < 18 ? "Bonjour" : "Bonsoir"; };
+export const greeting = () => {
+  const h = new Date().getHours();
+  return h < 5 ? "Bonsoir" : h < 18 ? "Bonjour" : "Bonsoir";
+};
 export const firstName = (n: string) => n.split(" ")[0];

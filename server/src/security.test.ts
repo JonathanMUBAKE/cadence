@@ -10,10 +10,16 @@ async function login(user: string) {
   cookies[user] = String(res.headers["set-cookie"]).split(";")[0];
 }
 const put = async (user: string, url: string, payload: unknown) => {
-  const res = await ctx.app.inject({ method: "PUT", url, payload: payload as never, headers: { cookie: cookies[user] } });
+  const res = await ctx.app.inject({
+    method: "PUT",
+    url,
+    payload: payload as never,
+    headers: { cookie: cookies[user] },
+  });
   return { status: res.statusCode, body: JSON.parse(res.body) };
 };
-const orgId = async () => (await ctx.db.one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Nova Mobile'"))!.id;
+const orgId = async () =>
+  (await ctx.db.one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Nova Mobile'"))!.id;
 
 describe("sécurité de l'organisation et de la connexion", () => {
   beforeEach(async () => {
@@ -22,7 +28,9 @@ describe("sécurité de l'organisation et de la connexion", () => {
     await put("u_alice", "/api/org/members/u_karim", { role: "owner" });
     await put("u_alice", "/api/org/members/u_hugo", { role: "admin" });
   });
-  afterEach(async () => { await ctx.app.close(); });
+  afterEach(async () => {
+    await ctx.app.close();
+  });
 
   it("un administrateur ne peut ni rétrograder ni retirer un propriétaire", async () => {
     const org = await orgId();
@@ -46,6 +54,9 @@ describe("sécurité de l'organisation et de la connexion", () => {
     expect(res.statusCode).toBe(200);
     const users = JSON.parse(res.body) as Record<string, unknown>[];
     expect(users.find((u) => u.id === "u_alice")).toMatchObject({ name: "Alice Martin", title: "Head of Product" });
-    for (const u of users) { expect(u).not.toHaveProperty("email"); expect(u).not.toHaveProperty("ai_instructions"); }
+    for (const u of users) {
+      expect(u).not.toHaveProperty("email");
+      expect(u).not.toHaveProperty("ai_instructions");
+    }
   });
 });

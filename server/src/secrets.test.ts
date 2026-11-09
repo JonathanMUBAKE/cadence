@@ -16,26 +16,73 @@ describe("configuration au démarrage", () => {
   });
   it("réserve le mode démo à un usage local et exige l'adresse publique sur le réseau", () => {
     expect(startupProblems({ CADENCE_DEMO: "1" }, local)).toEqual([]);
-    expect(startupProblems({ CADENCE_DEMO: "1", PUBLIC_URL: "https://c.test" }, { ...local, host: "0.0.0.0" })[0]).toMatch(/CADENCE_DEMO/);
+    expect(
+      startupProblems({ CADENCE_DEMO: "1", PUBLIC_URL: "https://c.test" }, { ...local, host: "0.0.0.0" })[0],
+    ).toMatch(/CADENCE_DEMO/);
     expect(startupProblems({}, { ...local, host: "0.0.0.0" })[0]).toMatch(/PUBLIC_URL/);
-    expect(startupProblems({ PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, { ...local, host: "0.0.0.0" })).toEqual([]);
+    expect(
+      startupProblems({ PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, { ...local, host: "0.0.0.0" }),
+    ).toEqual([]);
   });
   it("exige des secrets solides en production et avec une base distante", () => {
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, local)).toHaveLength(2);
-    expect(startupProblems({ COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: "court" }, { ...local, databaseUrl: true })).toEqual([expect.stringMatching(/CADENCE_SECRET_KEY/)]);
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x", COOKIE_SECRET: LEGACY_SECRET, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([expect.stringMatching(/COOKIE_SECRET/)]);
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x", COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([]);
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", CADENCE_DEMO: "1", COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: STRONG }, local)[0]).toMatch(/démo/);
+    expect(
+      startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, local),
+    ).toHaveLength(2);
+    expect(
+      startupProblems({ COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: "court" }, { ...local, databaseUrl: true }),
+    ).toEqual([expect.stringMatching(/CADENCE_SECRET_KEY/)]);
+    expect(
+      startupProblems(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://c.test",
+          SMTP_URL: "smtps://x",
+          COOKIE_SECRET: LEGACY_SECRET,
+          CADENCE_SECRET_KEY: STRONG,
+        },
+        local,
+      ),
+    ).toEqual([expect.stringMatching(/COOKIE_SECRET/)]);
+    expect(
+      startupProblems(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://c.test",
+          SMTP_URL: "smtps://x",
+          COOKIE_SECRET: STRONG,
+          CADENCE_SECRET_KEY: STRONG,
+        },
+        local,
+      ),
+    ).toEqual([]);
+    expect(
+      startupProblems(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://c.test",
+          CADENCE_DEMO: "1",
+          COOKIE_SECRET: STRONG,
+          CADENCE_SECRET_KEY: STRONG,
+        },
+        local,
+      )[0],
+    ).toMatch(/démo/);
   });
 });
 
 describe("secrets", () => {
   const dirs: string[] = [];
-  afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
 
   it("crée un secret local unique, le réutilise et ne touche pas au dossier de la base", async () => {
-    vi.stubEnv("COOKIE_SECRET", ""); vi.stubEnv("CADENCE_SECRET_KEY", "");
-    const parent = mkdtempSync(join(tmpdir(), "cadence-")); dirs.push(parent);
+    vi.stubEnv("COOKIE_SECRET", "");
+    vi.stubEnv("CADENCE_SECRET_KEY", "");
+    const parent = mkdtempSync(join(tmpdir(), "cadence-"));
+    dirs.push(parent);
     const data = join(parent, "data");
     const first = await import("./secrets.js");
     first.loadLocalSecret(data);
@@ -70,8 +117,14 @@ describe("secrets", () => {
     const ctx = await buildApp({ provider: "demo", demoDelayMs: 0 });
     try {
       const forged = cookie.sign("u_alice", LEGACY_SECRET);
-      const res = await ctx.app.inject({ method: "GET", url: "/api/me", headers: { cookie: `cadence_session=${encodeURIComponent(forged)}; cadence_uid=${encodeURIComponent(forged)}` } });
+      const res = await ctx.app.inject({
+        method: "GET",
+        url: "/api/me",
+        headers: { cookie: `cadence_session=${encodeURIComponent(forged)}; cadence_uid=${encodeURIComponent(forged)}` },
+      });
       expect(res.statusCode).toBe(401);
-    } finally { await ctx.app.close(); }
+    } finally {
+      await ctx.app.close();
+    }
   }, 30_000); // Ce test crée sa base lui-même : hors d'un beforeEach, il n'a par défaut que 5 secondes
 });

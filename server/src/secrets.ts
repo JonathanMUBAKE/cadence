@@ -27,7 +27,8 @@ export function loadLocalSecret(dataDir: string) {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
   const secret = readFileSync(file, "utf8").trim();
-  if (secret.length < MIN_SECRET_LENGTH) throw new Error(`Secret local invalide : supprimez ${file} pour en créer un nouveau`);
+  if (secret.length < MIN_SECRET_LENGTH)
+    throw new Error(`Secret local invalide : supprimez ${file} pour en créer un nouveau`);
   local = secret;
 }
 
@@ -35,7 +36,9 @@ export function loadLocalSecret(dataDir: string) {
  * TRUST_PROXY : nombre de proxys devant Cadence, ou leurs adresses (IP, CIDR).
  * Jamais « tout accepter » : l'adresse la plus à gauche de X-Forwarded-For est choisie par le visiteur, qui échapperait ainsi aux limites.
  */
-export function trustProxySetting(value = process.env.TRUST_PROXY): boolean | string | ((address: string, hop: number) => boolean) {
+export function trustProxySetting(
+  value = process.env.TRUST_PROXY,
+): boolean | string | ((address: string, hop: number) => boolean) {
   if (!value || value === "0") return false;
   if (!/^\d+$/.test(value)) return value;
   const hops = Number(value);
@@ -52,18 +55,37 @@ export function sslOptions(url: string, ca = process.env.DATABASE_CA_CERT) {
 }
 
 /** Raisons de refuser le démarrage : une configuration dangereuse ne doit jamais tourner silencieusement. */
-export function startupProblems(env: Record<string, string | undefined>, o: { host: string; databaseUrl: boolean }): string[] {
+export function startupProblems(
+  env: Record<string, string | undefined>,
+  o: { host: string; databaseUrl: boolean },
+): string[] {
   const out: string[] = [];
   const production = env.NODE_ENV === "production";
   const exposed = !LOOPBACK.has(o.host);
-  if (env.CADENCE_DEMO === "1" && (production || exposed)) out.push("Le mode démo permet de se connecter sans mot de passe : il est réservé à un usage local. Retirez CADENCE_DEMO, ou retirez HOST et NODE_ENV=production.");
-  if ((production || exposed) && !env.PUBLIC_URL) out.push("PUBLIC_URL est obligatoire : les liens d'invitation et de réinitialisation envoyés par e-mail en dépendent (ex. https://cadence.exemple.com).");
-  if ((production || exposed) && !env.SMTP_URL) out.push("SMTP_URL est obligatoire : la messagerie de la plateforme est seule à prouver qu'une adresse e-mail appartient à la personne invitée.");
-  if ((production || exposed) && env.PUBLIC_URL && !env.PUBLIC_URL.startsWith("https://")) out.push("PUBLIC_URL doit commencer par https:// : sans chiffrement, les sessions et les mots de passe circulent en clair.");
-  if (production && TLS_DATABASE.test(env.DATABASE_URL ?? "") && !env.DATABASE_CA_CERT) out.push("DATABASE_CA_CERT est obligatoire : indiquez le certificat de la base pour vérifier son identité (Supabase : Project Settings → Database → SSL).");
+  if (env.CADENCE_DEMO === "1" && (production || exposed))
+    out.push(
+      "Le mode démo permet de se connecter sans mot de passe : il est réservé à un usage local. Retirez CADENCE_DEMO, ou retirez HOST et NODE_ENV=production.",
+    );
+  if ((production || exposed) && !env.PUBLIC_URL)
+    out.push(
+      "PUBLIC_URL est obligatoire : les liens d'invitation et de réinitialisation envoyés par e-mail en dépendent (ex. https://cadence.exemple.com).",
+    );
+  if ((production || exposed) && !env.SMTP_URL)
+    out.push(
+      "SMTP_URL est obligatoire : la messagerie de la plateforme est seule à prouver qu'une adresse e-mail appartient à la personne invitée.",
+    );
+  if ((production || exposed) && env.PUBLIC_URL && !env.PUBLIC_URL.startsWith("https://"))
+    out.push(
+      "PUBLIC_URL doit commencer par https:// : sans chiffrement, les sessions et les mots de passe circulent en clair.",
+    );
+  if (production && TLS_DATABASE.test(env.DATABASE_URL ?? "") && !env.DATABASE_CA_CERT)
+    out.push(
+      "DATABASE_CA_CERT est obligatoire : indiquez le certificat de la base pour vérifier son identité (Supabase : Project Settings → Database → SSL).",
+    );
   if (production || o.databaseUrl) {
     for (const name of ["COOKIE_SECRET", "CADENCE_SECRET_KEY"]) {
-      if ((env[name]?.length ?? 0) < MIN_SECRET_LENGTH) out.push(`${name} est obligatoire ici et doit faire au moins ${MIN_SECRET_LENGTH} caractères.`);
+      if ((env[name]?.length ?? 0) < MIN_SECRET_LENGTH)
+        out.push(`${name} est obligatoire ici et doit faire au moins ${MIN_SECRET_LENGTH} caractères.`);
     }
   }
   return out;

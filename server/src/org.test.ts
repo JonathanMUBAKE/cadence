@@ -15,19 +15,24 @@ async function api(user: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DEL
   const cookie = [cookies[user], orgCookies[user]].filter(Boolean).join("; ");
   const res = await ctx.app.inject({ method, url, payload: payload as never, headers: { cookie } });
   const set = res.headers["set-cookie"];
-  if (set) for (const c of ([] as string[]).concat(set)) if (c.startsWith("cadence_org=")) orgCookies[user] = c.split(";")[0];
+  if (set)
+    for (const c of ([] as string[]).concat(set)) if (c.startsWith("cadence_org=")) orgCookies[user] = c.split(";")[0];
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
 const one = async <T>(sql: string, p: unknown[] = []) => (await ctx.db.one<T>(sql, p))!;
-const unitId = async (name: string) => (await one<{ id: string }>("SELECT id FROM org_units WHERE name = $1", [name])).id;
+const unitId = async (name: string) =>
+  (await one<{ id: string }>("SELECT id FROM org_units WHERE name = $1", [name])).id;
 const teamId = async (name: string) => (await one<{ id: string }>("SELECT id FROM teams WHERE name = $1", [name])).id;
-const projectByKey = async (key: string) => (await one<{ id: string }>("SELECT id FROM projects WHERE key = $1", [key])).id;
+const projectByKey = async (key: string) =>
+  (await one<{ id: string }>("SELECT id FROM projects WHERE key = $1", [key])).id;
 
 beforeEach(async () => {
   ctx = await buildApp({ provider: "demo", demoDelayMs: 0 });
   for (const u of ["u_alice", "u_karim", "u_hugo", "u_theo", "u_chloe"]) await login(u);
 });
-afterEach(async () => { await ctx.app.close(); });
+afterEach(async () => {
+  await ctx.app.close();
+});
 
 describe("hiérarchie des entités", () => {
   it("renvoie l'organigramme en profondeur, dans l'ordre", async () => {
@@ -38,7 +43,9 @@ describe("hiérarchie des entités", () => {
     expect(units.slice(inge + 1, inge + 3).map((u) => u.name)).toEqual(["Mobile", "Qualité"]);
   });
   it("refuse de placer une entité sous l'une de ses descendantes", async () => {
-    const res = await api("u_alice", "PATCH", `/api/units/${await unitId("Ingénierie")}`, { parent_id: await unitId("Mobile") });
+    const res = await api("u_alice", "PATCH", `/api/units/${await unitId("Ingénierie")}`, {
+      parent_id: await unitId("Mobile"),
+    });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/propres sous-entités/);
   });
@@ -46,7 +53,13 @@ describe("hiérarchie des entités", () => {
     const res = await api("u_alice", "DELETE", `/api/units/${await unitId("Ingénierie")}`);
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/2 sous-entité/);
-    const { id } = (await api("u_alice", "POST", "/api/org/units", { name: "Data", kind: "Service", parent_id: await unitId("Ingénierie") })).body;
+    const { id } = (
+      await api("u_alice", "POST", "/api/org/units", {
+        name: "Data",
+        kind: "Service",
+        parent_id: await unitId("Ingénierie"),
+      })
+    ).body;
     expect((await api("u_alice", "DELETE", `/api/units/${id}`)).status).toBe(200);
   });
   it("seul un administrateur modifie l'organigramme", async () => {
@@ -58,7 +71,8 @@ describe("droits effectifs en cascade", () => {
   it("le responsable d'une entité voit les projets de sa branche, sauf ceux d'une équipe privée", async () => {
     const team = await teamId("Équipe Mobile");
     await api("u_karim", "PATCH", `/api/teams/${team}`, { visibility: "request" });
-    const p = (await api("u_karim", "POST", "/api/projects", { name: "Outils internes", key: "TOOL", team_id: team })).body;
+    const p = (await api("u_karim", "POST", "/api/projects", { name: "Outils internes", key: "TOOL", team_id: team }))
+      .body;
     expect((await api("u_hugo", "GET", `/api/projects/${p.id}`)).status).toBe(403);
     await api("u_alice", "PATCH", `/api/units/${await unitId("Ingénierie")}`, { manager_id: "u_hugo" });
     const seen = await api("u_hugo", "GET", `/api/projects/${p.id}`);
@@ -69,14 +83,22 @@ describe("droits effectifs en cascade", () => {
   });
   it("les membres d'une équipe deviennent éditeurs de ses projets, le chef d'équipe administrateur", async () => {
     const team = await teamId("Équipe Mobile");
-    const p = (await api("u_karim", "POST", "/api/projects", { name: "Outils internes", key: "TOOL", team_id: team })).body;
+    const p = (await api("u_karim", "POST", "/api/projects", { name: "Outils internes", key: "TOOL", team_id: team }))
+      .body;
     expect((await api("u_theo", "GET", `/api/projects/${p.id}`)).body.role).toBe("editor");
     await api("u_alice", "PUT", `/api/projects/${p.id}/members/u_karim`, { role: null });
     expect((await api("u_karim", "GET", `/api/projects/${p.id}`)).body.role).toBe("admin");
   });
   it("un projet à accès privé n'est visible que de ses membres explicites", async () => {
     const team = await teamId("Équipe Mobile");
-    const p = (await api("u_karim", "POST", "/api/projects", { name: "Confidentiel", key: "SECRET", team_id: team, access: "private" })).body;
+    const p = (
+      await api("u_karim", "POST", "/api/projects", {
+        name: "Confidentiel",
+        key: "SECRET",
+        team_id: team,
+        access: "private",
+      })
+    ).body;
     expect((await api("u_theo", "GET", `/api/projects/${p.id}`)).status).toBe(403);
   });
   it("demande d'adhésion à une équipe « sur demande » puis accès au projet après acceptation", async () => {
@@ -93,7 +115,9 @@ describe("droits effectifs en cascade", () => {
   });
   it("une équipe privée est invisible et non rejoignable pour les non-membres", async () => {
     const rh = await teamId("RH");
-    expect(((await api("u_karim", "GET", "/api/teams")).body as { name: string }[]).map((t) => t.name)).not.toContain("RH");
+    expect(((await api("u_karim", "GET", "/api/teams")).body as { name: string }[]).map((t) => t.name)).not.toContain(
+      "RH",
+    );
     expect((await api("u_karim", "POST", `/api/teams/${rh}/join`)).status).toBe(403);
   });
 });
@@ -104,13 +128,20 @@ describe("organisations multiples", () => {
     expect((await api("u_karim", "GET", `/api/projects/${idv}`)).status).toBe(403);
     const me = (await api("u_alice", "GET", "/api/me")).body;
     expect(me.orgs.map((o: { name: string }) => o.name)).toEqual(["Nova Mobile", "Studio Lumen"]);
-    expect(((await api("u_alice", "GET", "/api/projects")).body as { key: string }[]).map((p) => p.key)).not.toContain("IDV");
-    expect(((await api("u_alice", "GET", "/api/search?q=Moodboard")).body.tasks)).toHaveLength(0);
+    expect(((await api("u_alice", "GET", "/api/projects")).body as { key: string }[]).map((p) => p.key)).not.toContain(
+      "IDV",
+    );
+    expect((await api("u_alice", "GET", "/api/search?q=Moodboard")).body.tasks).toHaveLength(0);
     const studio = me.orgs.find((o: { name: string }) => o.name === "Studio Lumen").id;
     await api("u_alice", "POST", `/api/orgs/${studio}/switch`);
-    expect(((await api("u_alice", "GET", "/api/projects")).body as { key: string }[]).map((p) => p.key)).toEqual(["IDV"]);
-    expect(((await api("u_alice", "GET", "/api/search?q=Moodboard")).body.tasks)).toHaveLength(1);
-    expect(((await api("u_alice", "GET", "/api/users")).body as { id: string }[]).map((u) => u.id).sort()).toEqual(["u_alice", "u_hugo"]);
+    expect(((await api("u_alice", "GET", "/api/projects")).body as { key: string }[]).map((p) => p.key)).toEqual([
+      "IDV",
+    ]);
+    expect((await api("u_alice", "GET", "/api/search?q=Moodboard")).body.tasks).toHaveLength(1);
+    expect(((await api("u_alice", "GET", "/api/users")).body as { id: string }[]).map((u) => u.id).sort()).toEqual([
+      "u_alice",
+      "u_hugo",
+    ]);
   });
   it("on ne peut pas basculer vers une organisation dont on n'est pas membre", async () => {
     const studio = (await one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Studio Lumen'")).id;
@@ -134,7 +165,9 @@ describe("organisations multiples", () => {
 
 describe("clés de projet et numérotation", () => {
   it("numérote les tâches par projet et les retrouve par clé", async () => {
-    const t = (await api("u_alice", "POST", "/api/tasks", { project_id: await projectByKey("WEB"), title: "Nouvelle page" })).body;
+    const t = (
+      await api("u_alice", "POST", "/api/tasks", { project_id: await projectByKey("WEB"), title: "Nouvelle page" })
+    ).body;
     expect(t.key).toBe("WEB-6");
     expect((await api("u_alice", "GET", "/api/tasks/WEB-6")).body.title).toBe("Nouvelle page");
   });
@@ -146,7 +179,9 @@ describe("clés de projet et numérotation", () => {
   });
   it("attribue des numéros uniques à des créations simultanées", async () => {
     const pid = await projectByKey("WEB");
-    const created = await Promise.all([1, 2, 3, 4, 5].map((i) => api("u_alice", "POST", "/api/tasks", { project_id: pid, title: `Parallèle ${i}` })));
+    const created = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => api("u_alice", "POST", "/api/tasks", { project_id: pid, title: `Parallèle ${i}` })),
+    );
     const keys = created.map((c) => c.body.key);
     expect(new Set(keys).size).toBe(5);
   });

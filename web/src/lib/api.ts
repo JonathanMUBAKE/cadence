@@ -1,5 +1,10 @@
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -17,10 +22,19 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 /** Envoi d'un fichier brut : le nom passe dans l'adresse, le corps reste binaire. */
 async function upload<T>(url: string, file: File): Promise<T> {
-  const res = await fetch(`${url}?name=${encodeURIComponent(file.name)}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/octet-stream" }, body: file });
+  const res = await fetch(`${url}?name=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
   const text = await res.text();
   let data: { error?: string } | null = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* réponse non JSON */ }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    /* réponse non JSON */
+  }
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`);
   return data as T;
 }

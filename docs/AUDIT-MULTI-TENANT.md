@@ -61,7 +61,18 @@
 - En usage local sans SMTP, le lien d'une adresse inconnue reste affiché à l'administrateur : aucune preuve d'adresse n'y est possible. Le démarrage en production ou sur le réseau exige désormais `SMTP_URL`.
 - Les agents IA restent ceux des données de démonstration : ils ne peuvent plus changer d'organisation, mais la création d'agents par organisation relève du lot D4 du plan de travail.
 - Les profils personnalisés existants ne reçoivent pas `teams.join` : il faut le cocher. Les profils système l'obtiennent par la migration 009.
-- Une organisation peut faire envoyer des invitations à n'importe quelle adresse par le SMTP de la plateforme : à plafonner avec A-02.
+- Le volume d'invitations par organisation est désormais plafonné (A-02) ; leur contenu reste libre (nom de l'organisation et de la personne).
+
+**Lots 2 à 5 corrigés**, sauf ce qui suit. La suite compte 261 tests, et `matrice.test.ts` rejoue le contrat d'accès à chaque exécution. Les numéros de ligne cités dans ce document datent d'avant le formatage automatique du code.
+
+| Reste à faire | Pourquoi ce n'est pas fait | Quand |
+| --- | --- | --- |
+| Politiques RLS par organisation (fin de T-03) | Exige un vrai Supabase et un rôle applicatif distinct : invérifiable ici, risque de couper l'accès. La base bloque déjà les liens entre organisations. | À la mise en place de Supabase |
+| Plusieurs serveurs en parallèle (Q-08) | Temps réel, limites et validations IA vivent en mémoire d'un seul serveur. | Avant de dépasser un serveur |
+| Découpage de `Services` et des fonctions complexes (Q-03, Q-04) | Gros refactoring sans bénéfice visible ; plus sûr à mener seul, zone par zone. | Chantier dédié |
+| Suppression logique et clés d'idempotence (fin de Q-09) | Évolution du modèle de données et de l'interface. | Chantier dédié |
+
+**Écart avec les corrections prévues.** R-02 : la lecture des adresses de service reste ouverte aux membres, car l'interface des équipes les affiche ; seule l'écriture pendant un GET est supprimée. S-07 : la 2FA obligatoire et le blocage des SMTP internes ne s'appliquent qu'aux serveurs en HTTPS, pour ne pas bloquer un usage local. Q-05 : Biome remplace ESLint et Prettier, qui dépendent d'une API absente de TypeScript 7.
 
 ---
 

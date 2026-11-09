@@ -1,8 +1,19 @@
 export interface Limits {
-  anonymousPerMinute: number; sessionPerMinute: number; aiPerMinute: number;
-  invitationsPerHour: number; ssePerUser: number; aiRunsPerHour: number;
+  anonymousPerMinute: number;
+  sessionPerMinute: number;
+  aiPerMinute: number;
+  invitationsPerHour: number;
+  ssePerUser: number;
+  aiRunsPerHour: number;
 }
-export const DEFAULT_LIMITS: Limits = { anonymousPerMinute: 300, sessionPerMinute: 600, aiPerMinute: 20, invitationsPerHour: 50, ssePerUser: 10, aiRunsPerHour: 300 };
+export const DEFAULT_LIMITS: Limits = {
+  anonymousPerMinute: 300,
+  sessionPerMinute: 600,
+  aiPerMinute: 20,
+  invitationsPerHour: 50,
+  ssePerUser: 10,
+  aiRunsPerHour: 300,
+};
 export const MINUTE = 60_000;
 export const HOUR = 60 * MINUTE;
 const MAX_KEYS = 50_000;

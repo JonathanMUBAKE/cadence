@@ -20,7 +20,11 @@ export function open(sealed: string): string {
   const version = sealed.slice(0, 3);
   if (version !== "v1:" && version !== "v2:") throw new Error("Secret illisible");
   const buf = Buffer.from(sealed.slice(3), "base64");
-  const d = createDecipheriv("aes-256-gcm", version === "v2:" ? keyV2(encryptionSecret()) : keyV1(encryptionSecret()), buf.subarray(0, 12));
+  const d = createDecipheriv(
+    "aes-256-gcm",
+    version === "v2:" ? keyV2(encryptionSecret()) : keyV1(encryptionSecret()),
+    buf.subarray(0, 12),
+  );
   d.setAuthTag(buf.subarray(12, 28));
   return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8");
 }

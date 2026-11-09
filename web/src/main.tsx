@@ -23,30 +23,33 @@ import { AdminPage } from "./pages/Admin";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/activation" element={<ActivationPage />} />
-            <Route path="/reinitialisation" element={<ResetPage />} />
-            <Route element={<AppLayout />}>
-              <Route index element={<HomePage />} />
-              <Route path="my-tasks" element={<MyTasksPage />} />
-              <Route path="inbox" element={<InboxPage />} />
-              <Route path="ai" element={<AgentsPage />} />
-              <Route path="org" element={<OrganizationPage />} />
-              <Route path="account" element={<AccountPage />} />
-              <Route path="admin" element={<AdminPage />} />
-              <Route path="teams" element={<TeamsPage />} />
-              <Route path="teams/:id" element={<TeamPage />} />
-              <Route path="projects/:id/:view?" element={<ProjectPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-        <Toaster position="bottom-left" toastOptions={{ className: "!rounded-xl !border-line !bg-raised !text-fg !shadow-lg !text-[13px]" }} />
-      </TooltipProvider>
-    </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/activation" element={<ActivationPage />} />
+              <Route path="/reinitialisation" element={<ResetPage />} />
+              <Route element={<AppLayout />}>
+                <Route index element={<HomePage />} />
+                <Route path="my-tasks" element={<MyTasksPage />} />
+                <Route path="inbox" element={<InboxPage />} />
+                <Route path="ai" element={<AgentsPage />} />
+                <Route path="org" element={<OrganizationPage />} />
+                <Route path="account" element={<AccountPage />} />
+                <Route path="admin" element={<AdminPage />} />
+                <Route path="teams" element={<TeamsPage />} />
+                <Route path="teams/:id" element={<TeamPage />} />
+                <Route path="projects/:id/:view?" element={<ProjectPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+          <Toaster
+            position="bottom-left"
+            toastOptions={{ className: "!rounded-xl !border-line !bg-raised !text-fg !shadow-lg !text-[13px]" }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
     </ErrorBoundary>
   </StrictMode>,
 );

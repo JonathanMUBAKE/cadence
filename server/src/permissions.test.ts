@@ -13,20 +13,31 @@ async function api(user: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DEL
   const res = await ctx.app.inject({ method, url, payload: payload as never, headers: { cookie: cookies[user] } });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
-const waitFor = async <T,>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 4000) => {
+const waitFor = async <T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 4000) => {
   const t0 = Date.now();
-  for (;;) { const v = await fn(); if (ok(v)) return v; if (Date.now() - t0 > ms) throw new Error("timeout"); await new Promise((r) => setTimeout(r, 20)); }
+  for (;;) {
+    const v = await fn();
+    if (ok(v)) return v;
+    if (Date.now() - t0 > ms) throw new Error("timeout");
+    await new Promise((r) => setTimeout(r, 20));
+  }
 };
-const projectId = async (name: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
-const orgId = async () => (await ctx.db.one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Nova Mobile'"))!.id;
-const seeded = async (pid: string) => (await api("u_alice", "GET", `/api/projects/${pid}/tasks`)).body[0] as { id: string; title: string };
-const kinds = async (pid: string) => (await ctx.db.query<{ kind: string }>("SELECT kind FROM activity WHERE project_id = $1", [pid])).map((a) => a.kind);
+const projectId = async (name: string) =>
+  (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
+const orgId = async () =>
+  (await ctx.db.one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Nova Mobile'"))!.id;
+const seeded = async (pid: string) =>
+  (await api("u_alice", "GET", `/api/projects/${pid}/tasks`)).body[0] as { id: string; title: string };
+const kinds = async (pid: string) =>
+  (await ctx.db.query<{ kind: string }>("SELECT kind FROM activity WHERE project_id = $1", [pid])).map((a) => a.kind);
 
 beforeEach(async () => {
   ctx = await buildApp({ provider: "demo", demoDelayMs: 0 });
   for (const u of ["u_alice", "u_karim", "u_theo", "u_hugo", "u_ines"]) await login(u);
 });
-afterEach(async () => { await ctx.app.close(); });
+afterEach(async () => {
+  await ctx.app.close();
+});
 
 describe("suppressions : seuls l'auteur et les administrateurs", () => {
   it("un éditeur ne supprime pas la tâche d'un autre ; son auteur et l'administrateur le peuvent", async () => {
@@ -57,7 +68,9 @@ describe("suppressions : seuls l'auteur et les administrateurs", () => {
     const pid = await projectId("Campagne de lancement");
     await ctx.svc.setMember("u_alice", pid, "u_karim", "editor");
     const other = await seeded(pid);
-    expect((await api("u_karim", "POST", `/api/tasks/${other.id}/move-project`, { project_id: dest })).status).toBe(403);
+    expect((await api("u_karim", "POST", `/api/tasks/${other.id}/move-project`, { project_id: dest })).status).toBe(
+      403,
+    );
     const mine = (await api("u_karim", "POST", "/api/tasks", { project_id: pid, title: "La mienne" })).body;
     expect((await api("u_karim", "POST", `/api/tasks/${mine.id}/move-project`, { project_id: dest })).status).toBe(200);
   });
@@ -83,10 +96,20 @@ describe("suppressions : seuls l'auteur et les administrateurs", () => {
     const [rule] = (await api("u_alice", "GET", `/api/projects/${pid}/ai/rules`)).body;
     await api("u_alice", "DELETE", `/api/projects/${pid}/ai/rules/${rule.id}`);
     expect(await kinds(pid)).toContain("rule.deleted");
-    const id = (await api("u_alice", "POST", "/api/org/units", { name: "Vide", kind: "Service", parent_id: (await api("u_alice", "GET", "/api/org/units")).body[0].id })).body.id;
+    const id = (
+      await api("u_alice", "POST", "/api/org/units", {
+        name: "Vide",
+        kind: "Service",
+        parent_id: (await api("u_alice", "GET", "/api/org/units")).body[0].id,
+      })
+    ).body.id;
     expect((await api("u_karim", "DELETE", `/api/units/${id}`)).status).toBe(403);
     await api("u_alice", "DELETE", `/api/units/${id}`);
-    expect((await ctx.db.query<{ kind: string }>("SELECT kind FROM activity WHERE org_id = $1", [await orgId()])).map((a) => a.kind)).toContain("unit.deleted");
+    expect(
+      (await ctx.db.query<{ kind: string }>("SELECT kind FROM activity WHERE org_id = $1", [await orgId()])).map(
+        (a) => a.kind,
+      ),
+    ).toContain("unit.deleted");
   });
 });
 
@@ -94,7 +117,12 @@ describe("actions IA", () => {
   it("un lecteur ne déclenche pas d'action IA payante", async () => {
     const pid = await projectId("Application mobile");
     const t = await seeded(pid);
-    for (const [url, body] of [[`/api/tasks/${t.id}/ai/subtasks`, {}], [`/api/tasks/${t.id}/ai/description`, {}], [`/api/projects/${pid}/ai/status`, {}], [`/api/projects/${pid}/ai/parse`, { text: "Faire ceci" }]] as const) {
+    for (const [url, body] of [
+      [`/api/tasks/${t.id}/ai/subtasks`, {}],
+      [`/api/tasks/${t.id}/ai/description`, {}],
+      [`/api/projects/${pid}/ai/status`, {}],
+      [`/api/projects/${pid}/ai/parse`, { text: "Faire ceci" }],
+    ] as const) {
       expect((await api("u_hugo", "POST", url, body)).status).toBe(403);
       expect((await api("u_karim", "POST", url, body)).status).toBe(200);
     }
@@ -102,10 +130,33 @@ describe("actions IA", () => {
 
   it("retoucher une validation ne peut pas changer sa cible", async () => {
     const pid = await projectId("Application mobile");
-    const t = (await api("u_alice", "POST", "/api/tasks", { project_id: pid, title: "Tâche IA", assignee_id: "ai_atlas" })).body;
-    const [a] = await waitFor(async () => (await api("u_alice", "GET", "/api/ai/approvals")).body as { id: string; input: Record<string, unknown>; task_id: string }[], (x) => x.some((y) => y.task_id === t.id));
+    const t = (
+      await api("u_alice", "POST", "/api/tasks", { project_id: pid, title: "Tâche IA", assignee_id: "ai_atlas" })
+    ).body;
+    const [a] = await waitFor(
+      async () =>
+        (await api("u_alice", "GET", "/api/ai/approvals")).body as {
+          id: string;
+          input: Record<string, unknown>;
+          task_id: string;
+        }[],
+      (x) => x.some((y) => y.task_id === t.id),
+    );
     const before = a.input;
-    const edited = (await api("u_alice", "POST", `/api/ai/approvals/${a.id}`, { approve: true, edits: { task: "RH-1", project_id: "RH", parent: "RH-1", object_id: "RH", __run_id: "x", title: "Titre retouché", body: "Texte retouché" } })).body;
+    const edited = (
+      await api("u_alice", "POST", `/api/ai/approvals/${a.id}`, {
+        approve: true,
+        edits: {
+          task: "RH-1",
+          project_id: "RH",
+          parent: "RH-1",
+          object_id: "RH",
+          __run_id: "x",
+          title: "Titre retouché",
+          body: "Texte retouché",
+        },
+      })
+    ).body;
     for (const k of ["task", "project_id", "parent", "object_id"]) expect(edited.input[k]).toEqual(before[k]);
     expect(edited.input.__run_id).toBeUndefined();
     expect(edited.input.title ?? edited.input.body).toMatch(/retouché/);

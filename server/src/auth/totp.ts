@@ -5,7 +5,8 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const PERIOD = 30;
 
 export function generateSecret() {
-  let bits = "", out = "";
+  let bits = "",
+    out = "";
   for (const b of randomBytes(20)) bits += b.toString(2).padStart(8, "0");
   for (let i = 0; i + 5 <= bits.length; i += 5) out += ALPHABET[parseInt(bits.slice(i, i + 5), 2)];
   return out;
@@ -34,7 +35,8 @@ export const totpCode = (secret: string) => codeAt(secret, currentStep());
 export function matchTotp(secret: string, code: string): number | null {
   if (!/^\d{6}$/.test(code)) return null;
   const given = Buffer.from(code);
-  for (const step of [currentStep() - 1, currentStep(), currentStep() + 1]) if (timingSafeEqual(Buffer.from(codeAt(secret, step)), given)) return step;
+  for (const step of [currentStep() - 1, currentStep(), currentStep() + 1])
+    if (timingSafeEqual(Buffer.from(codeAt(secret, step)), given)) return step;
   return null;
 }
 
