@@ -9,7 +9,7 @@ export type DomainEvent =
   | { type: "project.changed"; actorId: string; projectId: string }
   | { type: "org.changed"; actorId: string; orgId: string }
   | { type: "project.deleted"; actorId: string; projectId: string; members: string[] }
-  | { type: "notification"; userId: string }
+  | { type: "notification"; userId: string; notificationId?: string; orgId?: string | null; kind?: string; title?: string; body?: string; projectId?: string | null; taskId?: string | null; actorId?: string | null }
   | { type: "ai.run"; runId: string; projectId: string | null; taskId: string | null; agentId: string; status: string }
   | { type: "ai.step"; runId: string; projectId: string | null; taskId: string | null }
   | { type: "ai.delta"; runId: string; userId: string; delta: string }

@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Globe2, Lock, LogIn, Plus, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Check, Globe2, Lock, LogIn, Plus, UserPlus, Users, X } from "lucide-react";
 import { Avatar, AvatarStack, Button, Chip, Dialog, Empty, IconButton, ProgressRing, ProjectIcon, Spinner, cn } from "@/components/ui";
 import { AssigneePicker } from "@/components/pickers";
-import { useMe, useTeam, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
+import { useMe, useServiceAddress, useTeam, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { STATUS } from "@/lib/format";
 import { api } from "@/lib/api";
@@ -131,6 +131,7 @@ export function TeamPage() {
   const shell = useShell();
   const qc = useQueryClient();
   const [settings, setSettings] = useState(false);
+  const address = useServiceAddress("team", id);
   if (error) return <div className="p-8 text-[14px] text-danger">{(error as Error).message}</div>;
   if (!t) return <div className="flex h-64 items-center justify-center"><Spinner /></div>;
   const orgRole = me?.orgs.find((o) => o.id === me.org_id)?.role;
@@ -149,6 +150,7 @@ export function TeamPage() {
           <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
             <span className="flex items-center gap-1"><V.icon className="size-3.5" />{V.label}</span>
             <span>{units?.find((u) => u.id === t.unit_id)?.name ?? "Sans entité"}</span>
+            {address && <span className="flex items-center gap-1 font-mono text-[12.5px]" title="Adresse de service de l'équipe"><AtSign className="size-3.5" />{address.address}</span>}
             <AvatarStack users={t.members.map((m) => users.get(m.user_id))} size={20} />
           </p>
           {t.description && <p className="mt-2 max-w-2xl text-[13.5px]">{t.description}</p>}

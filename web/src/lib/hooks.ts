@@ -3,7 +3,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/re
 import { toast } from "sonner";
 import { api } from "./api";
 import type {
-  AiApproval, AiRule, AiRun, AiRunDetail, Activity, Me, Notification, OrgUnit, OrgUser, ProjectDetail, ProjectSummary, Stats, Task, TaskDetail, Team, TeamDetail, User,
+  AiApproval, AiRule, AiRun, AiRunDetail, Activity, EmailLogEntry, MailConfig, Me, ServiceAddress, Notification, OrgUnit, OrgUser, ProjectDetail, ProjectSummary, Stats, Task, TaskDetail, Team, TeamDetail, User,
 } from "./types";
 
 export const queryClient = new QueryClient({
@@ -16,6 +16,14 @@ export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: () => api
 export const useUnits = () => useQuery({ queryKey: ["units"], queryFn: () => api.get<OrgUnit[]>("/api/org/units") });
 export const useTeams = () => useQuery({ queryKey: ["teams"], queryFn: () => api.get<Team[]>("/api/teams") });
 export const useTeam = (id?: string) => useQuery({ queryKey: ["team", id], queryFn: () => api.get<TeamDetail>(`/api/teams/${id}`), enabled: !!id });
+export const useMailConfig = (enabled = true) => useQuery({ queryKey: ["mail", "config"], queryFn: () => api.get<MailConfig | null>("/api/org/mail"), enabled });
+export const useServiceAddresses = () => useQuery({ queryKey: ["mail", "addresses"], queryFn: () => api.get<ServiceAddress[]>("/api/org/mail/addresses"), staleTime: 60_000 });
+export const useMailLog = (enabled = true) => useQuery({ queryKey: ["mail", "log"], queryFn: () => api.get<EmailLogEntry[]>("/api/org/mail/log"), enabled });
+/** Adresse de service d'une entité ou d'une équipe (si la messagerie est configurée). */
+export function useServiceAddress(type: "org" | "unit" | "team", id?: string | null) {
+  const { data } = useServiceAddresses();
+  return data?.find((a) => a.target_type === type && (type === "org" || a.target_id === id)) ?? null;
+}
 export function useUserMap() {
   const { data } = useUsers();
   return useMemo(() => new Map((data ?? []).map((u) => [u.id, u])), [data]);

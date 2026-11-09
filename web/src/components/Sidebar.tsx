@@ -2,10 +2,11 @@ import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { NavLink, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, CheckCircle2, ChevronsUpDown, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
+import { Building2, Check, CheckCircle2, ChevronsUpDown, CircleUser, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
 import { Avatar, Button, Dialog, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, ProjectIcon, cn } from "./ui";
 import { useAiStatus, useApprovals, useMe, useNotifications, useProjects } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
+import { AvatarUpload } from "./AvatarUpload";
 import { api } from "@/lib/api";
 import { STATUS } from "@/lib/format";
 
@@ -35,6 +36,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const currentOrg = me?.orgs.find((o) => o.id === me.org_id);
   const [creating, setCreating] = useState(false);
   const [orgName, setOrgName] = useState("");
+  const [profile, setProfile] = useState(false);
   const groups = useMemo(() => {
     const m = new Map<string, [string, string | null, NonNullable<typeof projects>]>();
     for (const p of projects ?? []) {
@@ -79,6 +81,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <MenuContent className="w-[240px]">
             <MenuLabel>Connecté en tant que</MenuLabel>
             <div className="flex items-center gap-2 px-2 pb-2"><Avatar user={me} size={26} /><div className="min-w-0"><p className="truncate text-[13px] font-medium">{me?.name}</p><p className="truncate text-[11.5px] text-faint">{me?.title}</p></div></div>
+            <MenuItem icon={<CircleUser className="size-3.5" />} onSelect={() => setProfile(true)}>Mon profil</MenuItem>
             <MenuSeparator />
             <MenuLabel>Organisations</MenuLabel>
             {me?.orgs.map((o) => (
@@ -135,6 +138,21 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         footer={<><Button onClick={() => setCreating(false)}>Annuler</Button><Button variant="primary" disabled={!orgName.trim()} onClick={createOrg}>Créer</Button></>}>
         <input autoFocus value={orgName} onChange={(e) => setOrgName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && orgName.trim() && createOrg()} placeholder="Nom de l'organisation"
           className="h-10 w-full rounded-lg border border-line bg-bg/60 px-3 text-[14px] outline-none focus:border-line-strong" />
+      </Dialog>
+
+      <Dialog open={profile} onOpenChange={setProfile} title="Mon profil" width={460}
+        description="Votre photo apparaît partout : tâches, commentaires, équipes et organigramme, dans toutes vos organisations."
+        footer={<Button onClick={() => setProfile(false)}>Fermer</Button>}>
+        {me && (
+          <div className="space-y-4">
+            <AvatarUpload user={me} size={84} />
+            <dl className="grid grid-cols-[110px_1fr] gap-y-2 border-t border-line pt-4 text-[13px]">
+              <dt className="text-muted">Nom</dt><dd className="font-medium">{me.name}</dd>
+              <dt className="text-muted">Fonction</dt><dd>{me.title ?? "—"}</dd>
+              <dt className="text-muted">E-mail</dt><dd className="font-mono text-[12.5px]">{me.email ?? "—"}</dd>
+            </dl>
+          </div>
+        )}
       </Dialog>
 
       <div className="border-t border-line p-3">

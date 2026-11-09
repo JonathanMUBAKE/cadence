@@ -13,6 +13,8 @@ export type TeamVisibility = "public" | "request" | "private";
 export interface User {
   id: string; name: string; email: string | null; title: string | null;
   avatar_color: string; is_ai: boolean; ai_role: string | null; ai_instructions: string | null;
+  /** Lien versionné vers la photo de profil, ou null (initiales). */
+  avatar_url: string | null;
 }
 export interface OrgUser extends User { org_role: OrgRole; unit_id: string | null }
 export interface Organization { id: string; name: string; slug: string; domains: string[]; role: OrgRole }
@@ -93,6 +95,19 @@ const toTask = (r: Row): Task => ({
 });
 const TASK_COLS = `t.*, p.key || '-' || t.number AS key`;
 
+/** Ajoute le lien de la photo (versionné : le navigateur peut la garder en cache indéfiniment). */
+export const withAvatar = <T extends Row>(u: T) => {
+  const { avatar_version, ...rest } = u as T & { avatar_version?: number };
+  return { ...rest, avatar_url: Number(avatar_version) > 0 ? `/api/avatars/${rest.id}?v=${Number(avatar_version)}` : null };
+};
+const AVATAR_MAX = 512 * 1024;
+const AVATAR_TYPES: [string, (b: Buffer) => boolean][] = [
+  ["image/png", (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))],
+  ["image/jpeg", (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  ["image/gif", (b) => b.subarray(0, 4).toString("latin1") === "GIF8"],
+  ["image/webp", (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP"],
+];
+
 export interface TaskFilters {
   project_id?: string; section_id?: string; assignee_id?: string | null; completed?: boolean;
   overdue?: boolean; due_before?: string; due_after?: string; text?: string;
@@ -112,14 +127,64 @@ export class Services {
 
   // ================================================================ utilisateurs
   async user(id: string): Promise<User> {
-    const r = await this.db.one<User>("SELECT * FROM users WHERE id = $1", [id]);
+    const r = await this.userOrNull(id);
     if (!r) throw notFound("Utilisateur introuvable");
     return r;
   }
-  async userOrNull(id: string) { return (await this.db.one<User>("SELECT * FROM users WHERE id = $1", [id])) ?? null; }
+  async userOrNull(id: string): Promise<User | null> {
+    const r = await this.db.one<Row>("SELECT * FROM users WHERE id = $1", [id]);
+    return r ? (withAvatar(r) as unknown as User) : null;
+  }
   async usersOf(orgId: string): Promise<OrgUser[]> {
-    return this.db.query<OrgUser>(`SELECT u.*, om.role AS org_role, om.unit_id FROM users u JOIN org_members om ON om.user_id = u.id
-      WHERE om.org_id = $1 ORDER BY u.is_ai, u.name`, [orgId]);
+    return (await this.db.query<Row>(`SELECT u.*, om.role AS org_role, om.unit_id FROM users u JOIN org_members om ON om.user_id = u.id
+      WHERE om.org_id = $1 ORDER BY u.is_ai, u.name`, [orgId])).map((u) => withAvatar(u) as unknown as OrgUser);
+  }
+
+  // ================================================================ photos de profil
+  /** Seul l'intéressé, ou un administrateur d'une organisation dont il est membre, peut changer sa photo. */
+  private async canEditProfile(actorId: string, userId: string) {
+    if (actorId === userId) return;
+    const shared = await this.db.one(`SELECT 1 FROM org_members a JOIN org_members b ON b.org_id = a.org_id AND b.user_id = $2
+      WHERE a.user_id = $1 AND a.role IN ('owner','admin')`, [actorId, userId]);
+    if (!shared) throw forbidden("Seul l'intéressé ou un administrateur peut changer cette photo");
+  }
+  async setAvatar(actorId: string, userId: string, dataUrl: string) {
+    await this.user(userId);
+    await this.canEditProfile(actorId, userId);
+    const m = /^data:([\w/+.-]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl);
+    if (!m) throw badRequest("Image attendue au format data:image/…;base64");
+    const data = Buffer.from(m[2], "base64");
+    if (data.length > AVATAR_MAX) throw new HttpError(413, "Image trop lourde : 512 Ko au maximum");
+    const mime = AVATAR_TYPES.find(([, test]) => test(data))?.[0];
+    if (!mime) throw new HttpError(415, "Format non pris en charge : PNG, JPEG, GIF ou WebP");
+    await this.db.tx(async (q) => {
+      await q.query(`INSERT INTO avatars (user_id, mime, data) VALUES ($1,$2,$3)
+        ON CONFLICT (user_id) DO UPDATE SET mime = EXCLUDED.mime, data = EXCLUDED.data, updated_at = now()`, [userId, mime, data]);
+      await q.query("UPDATE users SET avatar_version = abs(avatar_version) + 1 WHERE id = $1", [userId]);
+    });
+    await this.log(actorId, "user.avatar", { data: { userId } });
+    await this.emitUserChanged(actorId, userId);
+    return this.user(userId);
+  }
+  async removeAvatar(actorId: string, userId: string) {
+    await this.user(userId);
+    await this.canEditProfile(actorId, userId);
+    await this.db.query("DELETE FROM avatars WHERE user_id = $1", [userId]);
+    // La version n'est jamais remise à zéro : un ancien lien ne doit pas resservir une ancienne image
+    await this.db.query("UPDATE users SET avatar_version = -abs(avatar_version) WHERE id = $1", [userId]);
+    await this.log(actorId, "user.avatar", { data: { userId, removed: true } });
+    await this.emitUserChanged(actorId, userId);
+  }
+  async avatar(actorId: string, userId: string) {
+    // Visible des personnes qui partagent une organisation avec l'intéressé
+    if (actorId !== userId && !(await this.db.one("SELECT 1 FROM org_members a JOIN org_members b ON b.org_id = a.org_id AND b.user_id = $2 WHERE a.user_id = $1", [actorId, userId])))
+      throw notFound("Photo introuvable");
+    const r = await this.db.one<{ mime: string; data: Uint8Array }>("SELECT mime, data FROM avatars WHERE user_id = $1", [userId]);
+    if (!r) throw notFound("Photo introuvable");
+    return { mime: r.mime, data: Buffer.from(r.data) };
+  }
+  private async emitUserChanged(actorId: string, userId: string) {
+    for (const o of await this.db.query<{ org_id: string }>("SELECT org_id FROM org_members WHERE user_id = $1", [userId])) this.bus.emit({ type: "org.changed", actorId, orgId: o.org_id });
   }
   async agents(orgId: string) { return (await this.usersOf(orgId)).filter((u) => u.is_ai && u.id !== "ai_cadence"); }
 
@@ -824,9 +889,10 @@ export class Services {
     return (await this.db.one<{ org_id: string }>("SELECT org_id FROM projects WHERE id = $1", [projectId]))?.org_id ?? "";
   }
   async notify(userId: string, orgId: string | null, n: { kind: string; title: string; body?: string; task_id?: string | null; project_id?: string | null; approval_id?: string | null; actor_id?: string | null }) {
+    const id = uid("ntf");
     await this.db.query(`INSERT INTO notifications (id, org_id, user_id, kind, title, body, task_id, project_id, approval_id, actor_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [uid("ntf"), orgId || null, userId, n.kind, n.title, n.body ?? "", n.task_id ?? null, n.project_id ?? null, n.approval_id ?? null, n.actor_id ?? null]);
-    this.bus.emit({ type: "notification", userId });
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, orgId || null, userId, n.kind, n.title, n.body ?? "", n.task_id ?? null, n.project_id ?? null, n.approval_id ?? null, n.actor_id ?? null]);
+    this.bus.emit({ type: "notification", userId, notificationId: id, orgId: orgId || null, kind: n.kind, title: n.title, body: n.body ?? "", projectId: n.project_id ?? null, taskId: n.task_id ?? null, actorId: n.actor_id ?? null });
   }
   private async notifyAssigned(actorId: string, task: Task) {
     if (!task.assignee_id || (await this.user(task.assignee_id)).is_ai) return;

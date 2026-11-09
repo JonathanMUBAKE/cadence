@@ -33,6 +33,13 @@ Outil de gestion de projet complet avec IA embarquée, inspiré du modèle d'Asa
 - **Organigramme hiérarchique** à profondeur libre : entreprise, filiale, direction, département, service, site. Chaque entité a un responsable, qui voit en lecture les projets de toute sa branche.
 - **Équipes** publiques, sur demande (avec validation) ou privées, rattachées à une entité.
 - **Projets** rattachés à une équipe, avec une clé (`APP-12`) et un accès « toute l'équipe » ou « privé ».
+- **Photos de profil** pour les personnes et les coéquipiers IA. L'image est recadrée et allégée dans le navigateur, puis stockée en base. Seuls l'intéressé ou un administrateur peuvent la changer.
+
+**Messagerie de l'organisation**
+- Chaque organisation a son propre **serveur SMTP** et son **domaine**. Le mot de passe est chiffré en base (AES-256-GCM) et n'est jamais renvoyé par l'API.
+- Une **adresse de service par niveau**, toutes sur le même domaine : `contact@` pour l'organisation, puis une adresse par entité (`ingenierie@`, `ressources-humaines@`…) et une par équipe (`equipe-mobile@`…). Chaque adresse est personnalisable, sans doublon.
+- Les **notifications par e-mail** (assignation, mention, commentaire…) partent de l'adresse la plus précise : équipe du projet, sinon entité, sinon organisation. Le sujet suit la clé de tâche (`[APP-12] Titre`).
+- Un bouton d'**e-mail de test**, des messages d'erreur SMTP compréhensibles et un **journal des envois**. Une panne SMTP ne bloque jamais l'action d'origine.
 - **Droits effectifs** calculés en cascade : rôle dans l'organisation, adhésion explicite, appartenance à l'équipe, supervision hiérarchique, visibilité de l'équipe. Les invités ne voient que ce qui leur est partagé.
 
 ## Démarrer
@@ -80,11 +87,12 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | `ANTHROPIC_API_KEY` | Active Claude | mode démo |
 | `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
 | `COOKIE_SECRET` | Signature des sessions (**à changer en production**) | valeur de développement |
+| `CADENCE_SECRET_KEY` | Clé de chiffrement des secrets en base (mot de passe SMTP). **À fixer en production** : la changer rend les mots de passe enregistrés illisibles. | `COOKIE_SECRET` |
 
 ## Tests
 
 ```bash
-npm test          # 40 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS (Vitest)
+npm test          # 51 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 
@@ -93,9 +101,11 @@ npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 server/src
   db.ts             accès PostgreSQL (pg pour Supabase, PGlite embarqué) et migrations
-  ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS)
+  ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS, 003 photos et messagerie)
   services.ts       logique métier : organisations, entités, équipes, projets, tâches, droits effectifs
-  bus.ts            événements métier → temps réel et déclencheurs IA
+  bus.ts            événements métier → temps réel, déclencheurs IA et e-mails
+  mail.ts           SMTP par organisation, adresses de service par niveau, envoi des notifications
+  crypto.ts         chiffrement des secrets stockés en base
   app.ts            API REST + SSE (Fastify), validation zod, front-end compilé
   ai/tools.ts       outils exposés au modèle (lecture / écriture), exécutés avec les droits de l'agent
   ai/engine.ts      boucle d'agent, checkpoints, déclencheurs, règles, actions intelligentes

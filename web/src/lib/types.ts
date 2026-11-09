@@ -5,7 +5,19 @@ export type ProjectStatus = "on_track" | "at_risk" | "off_track" | "done";
 export interface User {
   id: string; name: string; email: string | null; title: string | null; avatar_color: string;
   is_ai: boolean; ai_role: string | null; ai_instructions: string | null;
+  /** Photo de profil (lien versionné), ou null : on affiche les initiales. */
+  avatar_url?: string | null;
 }
+export type SmtpSecurity = "none" | "starttls" | "tls";
+export interface MailConfig {
+  domain: string; from_name: string; notifications: boolean;
+  smtp: { host: string; port: number; security: SmtpSecurity; username: string; password_set: boolean };
+}
+export interface ServiceAddress {
+  id: string; target_type: "org" | "unit" | "team"; target_id: string; name: string; kind: string;
+  parent_name: string | null; local_part: string; address: string;
+}
+export interface EmailLogEntry { id: string; from_address: string; to_address: string; subject: string; status: "sent" | "failed"; error: string | null; created_at: string }
 export type OrgRole = "owner" | "admin" | "member" | "guest";
 export interface Organization { id: string; name: string; slug: string; domains: string[]; role: OrgRole }
 export interface Me extends User { org_id: string; orgs: Organization[] }

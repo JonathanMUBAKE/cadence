@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronRight, Network, Plus, Trash2, Users } from "lucide-react";
+import { AtSign, ChevronRight, Network, Plus, Trash2, Users } from "lucide-react";
 import { Avatar, Button, Empty, Spinner, cn } from "@/components/ui";
 import { AssigneePicker } from "@/components/pickers";
+import { AvatarUpload } from "@/components/AvatarUpload";
+import { OrgMail } from "./OrgMail";
 import { ORG_ROLE } from "@/components/Sidebar";
-import { useMe, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
+import { useMe, useServiceAddress, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import type { OrgUnit } from "@/lib/types";
 
@@ -16,7 +18,7 @@ export function OrganizationPage() {
   const { data: me } = useMe();
   const { data: units, isLoading } = useUnits();
   const { data: people } = useUsers();
-  const [tab, setTab] = useState<"tree" | "people">("tree");
+  const [tab, setTab] = useState<"tree" | "people" | "mail">("tree");
   const org = me?.orgs.find((o) => o.id === me.org_id);
   const isAdmin = org?.role === "owner" || org?.role === "admin";
   const humans = (people ?? []).filter((u) => !u.is_ai);
@@ -32,11 +34,12 @@ export function OrganizationPage() {
         </p>
       </header>
       <div className="mb-5 flex gap-1 border-b border-line">
-        {([["tree", "Organigramme"], ["people", "Personnes"]] as const).map(([k, l]) => (
+        {([["tree", "Organigramme"], ["people", "Personnes"], ...(isAdmin ? [["mail", "Messagerie"]] : [])] as [typeof tab, string][]).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className={cn("-mb-px border-b-2 px-2.5 pb-2.5 text-[13.5px]", tab === k ? "border-fg font-medium text-fg" : "border-transparent text-muted hover:text-fg")}>{l}</button>
         ))}
       </div>
-      {isLoading ? <Spinner /> : tab === "tree" ? <Tree units={units ?? []} isAdmin={isAdmin} /> : <People units={units ?? []} isAdmin={isAdmin} />}
+      {isLoading ? <Spinner /> : tab === "tree" ? <Tree units={units ?? []} isAdmin={isAdmin} />
+        : tab === "mail" && isAdmin ? <OrgMail orgName={org?.name ?? ""} /> : <People units={units ?? []} isAdmin={isAdmin} />}
     </div>
   );
 }
@@ -103,6 +106,8 @@ function UnitDetail({ unit, units, isAdmin, onSelect }: { unit: OrgUnit; units: 
     return out;
   }, [unit.id, units]);
   const manager = unit.manager_id ? users.get(unit.manager_id) : null;
+  // L'entité racine représente l'organisation : elle utilise l'adresse contact@
+  const address = useServiceAddress(unit.parent_id ? "unit" : "org", unit.id);
   const sub = units.filter((u) => u.parent_id === unit.id);
   const unitTeams = (teams ?? []).filter((t) => t.unit_id === unit.id);
   const members = humans.filter((u) => u.unit_id === unit.id);
@@ -113,6 +118,7 @@ function UnitDetail({ unit, units, isAdmin, onSelect }: { unit: OrgUnit; units: 
       <div className="space-y-3">
         <input value={name} disabled={!isAdmin} onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== unit.name && patch({ name: name.trim() }, "Entité renommée")}
           aria-label="Nom de l'entité" className="w-full rounded-md bg-transparent text-[19px] font-semibold tracking-[-0.01em] outline-none hover:bg-hover focus:bg-hover disabled:hover:bg-transparent" />
+        {address && <p className="-mt-2 flex items-center gap-1.5 text-[12.5px] text-muted" title="Adresse de service"><AtSign className="size-3.5" /><span className="font-mono">{address.address}</span></p>}
         <div className="grid grid-cols-2 gap-2">
           <label className="text-[12px] text-muted">Type
             <select value={unit.kind} disabled={!isAdmin} onChange={(e) => patch({ kind: e.target.value })} className={cn(field, "mt-1")}>
@@ -187,7 +193,7 @@ function People({ units, isAdmin }: { units: OrgUnit[]; isAdmin: boolean }) {
         <tbody>
           {(people ?? []).filter((u) => u.id !== "ai_cadence").map((u) => (
             <tr key={u.id} className="border-b border-line last:border-b-0">
-              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><Avatar user={u} size={26} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.title}</span></span></span></td>
+              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><AvatarUpload compact user={u} size={30} editable={isAdmin || u.id === me?.id} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.title}</span></span></span></td>
               <td className="px-2">
                 <select aria-label={`Rôle de ${u.name}`} disabled={!isAdmin || u.id === me?.id} value={u.org_role} className={sel}
                   onChange={(e) => set(`/api/org/members/${u.id}`, { role: e.target.value }, "Rôle mis à jour")}>

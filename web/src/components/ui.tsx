@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import clsx from "clsx";
 import * as DM from "@radix-ui/react-dropdown-menu";
 import * as PO from "@radix-ui/react-popover";
@@ -52,10 +52,25 @@ export const Kbd = ({ children }: { children: ReactNode }) => (
 
 // ------------------------------------------------------------------ avatars
 export function Avatar({ user, size = 22, ring }: { user?: User | null; size?: number; ring?: boolean }) {
+  const [broken, setBroken] = useState<string | null>(null);
   if (!user) {
     return <span className="inline-flex shrink-0 items-center justify-center rounded-full border border-dashed border-line-strong text-faint" style={{ width: size, height: size }}>
       <Users style={{ width: size * 0.5, height: size * 0.5 }} />
     </span>;
+  }
+  if (user.avatar_url && broken !== user.avatar_url) {
+    return (
+      <span title={user.name} className={cn("relative inline-flex shrink-0", ring && "rounded-full ring-2 ring-panel")} style={{ width: size, height: size }}>
+        <img src={user.avatar_url} alt={user.name} width={size} height={size} loading="lazy" decoding="async" onError={() => setBroken(user.avatar_url!)}
+          className={cn("size-full rounded-full object-cover", user.is_ai && "ring-1 ring-ai-line")} />
+        {/* Une photo ne doit pas faire oublier qu'il s'agit d'une IA */}
+        {user.is_ai && size >= 18 && (
+          <span className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-ai text-white ring-2 ring-panel" style={{ width: Math.max(10, size * 0.42), height: Math.max(10, size * 0.42) }}>
+            <Sparkles style={{ width: Math.max(6, size * 0.26), height: Math.max(6, size * 0.26) }} strokeWidth={2.6} />
+          </span>
+        )}
+      </span>
+    );
   }
   if (user.is_ai) {
     return (

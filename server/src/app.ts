@@ -5,7 +5,8 @@ import { existsSync } from "node:fs";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
 import { Bus, type DomainEvent } from "./bus.js";
-import { HttpError, Services, forbidden } from "./services.js";
+import { HttpError, Services, forbidden, withAvatar } from "./services.js";
+import { MailService } from "./mail.js";
 import { AiEngine } from "./ai/engine.js";
 import { AnthropicProvider, MODEL, type AiProvider } from "./ai/provider.js";
 import { DemoProvider } from "./ai/demo.js";
@@ -31,10 +32,12 @@ export async function buildApp(opts: AppOptions = {}) {
   const ai = new AiEngine(svc, bus, provider);
   await ai.init();
   const detach = ai.attach();
+  const mail = new MailService(db, svc, bus);
+  const detachMail = mail.attach();
 
   const app = Fastify({ logger: opts.logger ?? false });
   await app.register(cookie, { secret: process.env.COOKIE_SECRET || "cadence-dev-secret-change-me" });
-  app.addHook("onClose", async () => { detach(); await ai.shutdown(); await db.close(); });
+  app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
@@ -68,7 +71,7 @@ export async function buildApp(opts: AppOptions = {}) {
     return u;
   });
   app.post("/api/auth/logout", async (_req, reply) => { reply.clearCookie(COOKIE, { path: "/" }); reply.clearCookie(ORG_COOKIE, { path: "/" }); return { ok: true }; });
-  app.get("/api/auth/users", async () => db.query("SELECT * FROM users WHERE NOT is_ai ORDER BY name"));
+  app.get("/api/auth/users", async () => (await db.query("SELECT * FROM users WHERE NOT is_ai ORDER BY name")).map(withAvatar));
 
   app.register(async (r) => {
     r.addHook("preHandler", auth);
@@ -80,6 +83,28 @@ export async function buildApp(opts: AppOptions = {}) {
 
     r.get("/api/me", async (req) => ({ ...(await svc.user(me(req))), org_id: org(req), orgs: await svc.orgsOf(me(req)) }));
     r.get("/api/users", async (req) => svc.usersOf(org(req)));
+
+    // ---------------------------------------------------------------- photos de profil
+    r.put<{ Params: { id: string } }>("/api/users/:id/avatar", { bodyLimit: 1024 * 1024 }, async (req) =>
+      svc.setAvatar(me(req), req.params.id, z.object({ data_url: z.string().max(1024 * 1024) }).parse(req.body).data_url));
+    r.delete<{ Params: { id: string } }>("/api/users/:id/avatar", async (req) => { await svc.removeAvatar(me(req), req.params.id); return { ok: true }; });
+    r.get<{ Params: { id: string } }>("/api/avatars/:id", async (req, reply) => {
+      const a = await svc.avatar(me(req), req.params.id);
+      return reply.header("Content-Type", a.mime).header("Cache-Control", "private, max-age=31536000, immutable").header("X-Content-Type-Options", "nosniff").send(a.data);
+    });
+
+    // ---------------------------------------------------------------- messagerie de l'organisation
+    r.get("/api/org/mail", async (req) => mail.getConfig(me(req), org(req)));
+    r.put("/api/org/mail", async (req) => mail.updateConfig(me(req), org(req), z.object({
+      domain: z.string().min(3).max(253), from_name: z.string().max(120).optional(), notifications: z.boolean().optional(),
+      smtp: z.object({ host: z.string().min(1).max(253), port: z.number().int().min(1).max(65535), security: z.enum(["none", "starttls", "tls"]),
+        username: z.string().max(320).optional(), password: z.string().max(1000).optional() }),
+    }).parse(req.body)));
+    r.post("/api/org/mail/test", async (req) => mail.test(me(req), org(req)));
+    r.get("/api/org/mail/log", async (req) => mail.log(me(req), org(req)));
+    r.get("/api/org/mail/addresses", async (req) => mail.listAddresses(me(req), org(req)));
+    r.patch<{ Params: { id: string } }>("/api/org/mail/addresses/:id", async (req) =>
+      mail.setAddress(me(req), org(req), req.params.id, z.object({ local_part: z.string().min(1).max(64) }).parse(req.body).local_part));
 
     // ---------------------------------------------------------------- organisations, entités, équipes
     r.post("/api/orgs", async (req, reply) => {
@@ -265,5 +290,5 @@ export async function buildApp(opts: AppOptions = {}) {
     });
   }
 
-  return { app, db, svc, ai, bus, provider };
+  return { app, db, svc, ai, bus, provider, mail };
 }
