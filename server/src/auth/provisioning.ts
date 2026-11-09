@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 import { uid, type Queryable } from "../db.js";
 import { HttpError, badRequest, forbidden, notFound, type Services } from "../services.js";
 import type { Access } from "./access.js";
-import { fingerprint, newToken, type Auth, type RequestInfo } from "./service.js";
+import { fingerprint, maskEmail, newToken, type Auth, type RequestInfo } from "./service.js";
 
 const INVITE_HOURS = 72, RESET_MINUTES = 30, SETUP_HOURS = 24;
 const HOURLY_REQUEST_LIMIT = 5;
@@ -226,9 +226,13 @@ export class Provisioning {
 
   async forgot(emailRaw: string, info: RequestInfo) {
     if (!(await this.withinHourlyLimit("password.forgot", info.ip))) return;
-    await this.auth.record("password.forgot", { ip: info.ip, data: { email: emailRaw.slice(0, 320) } });
+    await this.auth.record("password.forgot", { ip: info.ip, data: { email: maskEmail(emailRaw) } });
     const u = await this.svc.db.one<{ id: string; name: string; email: string }>("SELECT id, name, email FROM users WHERE lower(email) = lower($1) AND status = 'active' AND NOT is_ai", [emailRaw.trim()]);
-    if (!u) return;
+    // En arrière-plan : la durée de la réponse ne doit pas révéler si le compte existe
+    if (u) void this.sendReset(u).catch(() => undefined);
+  }
+
+  private async sendReset(u: { id: string; name: string; email: string }) {
     const link = await this.createToken("reset", u.id, null, RESET_MINUTES);
     const sent = await this.deliver(u.email, "Réinitialiser votre mot de passe", `Bonjour ${u.name},\n\nPour choisir un nouveau mot de passe, ouvrez ce lien, valable ${RESET_MINUTES} minutes :\n\n${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\n— Cadence`);
     if (!sent && process.env.NODE_ENV !== "production") console.info(`[auth] aucun SMTP configuré : lien de réinitialisation pour ${u.email} : ${link}`);
@@ -247,6 +251,7 @@ export class Provisioning {
 
   async requireSuperAdmin(actorId: string) {
     if (!(await this.svc.db.one("SELECT 1 FROM users WHERE id = $1 AND platform_role = 'super_admin' AND status = 'active'", [actorId]))) throw forbidden("Réservé à l'administrateur système");
+    await this.svc.assertAdminMfa(actorId);
   }
 
   async adminUsers(actorId: string) {

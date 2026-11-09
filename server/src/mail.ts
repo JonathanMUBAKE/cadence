@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { uid, type Db } from "./db.js";
 import type { Bus, DomainEvent } from "./bus.js";
 import { open, seal } from "./crypto.js";
+import { assertPublicHost } from "./net-guard.js";
 import { badRequest, notFound, type Services } from "./services.js";
 
 /**
@@ -52,6 +53,8 @@ export function smtpError(e: unknown): string {
 export class MailService {
   private queue: Promise<unknown> = Promise.resolve();
   private addressSync: Promise<unknown> = Promise.resolve();
+  /** Sur un serveur exposé, un SMTP saisi par un client ne peut pas viser le réseau interne. */
+  blockPrivateHosts = false;
   private detach: (() => void) | null = null;
   private closed = false;
 
@@ -92,6 +95,7 @@ export class MailService {
     if (!DOMAIN_RE.test(domain)) throw badRequest("Nom de domaine invalide (exemple : mon-entreprise.fr)");
     const host = input.smtp.host.trim();
     if (!host) throw badRequest("L'hôte SMTP est obligatoire");
+    if (this.blockPrivateHosts) await assertPublicHost(host);
     const previous = await this.stored(orgId);
     const org = await this.db.one<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [orgId]);
     const mail: StoredMail = {
@@ -200,6 +204,7 @@ export class MailService {
       this.db.query("INSERT INTO email_log (id, org_id, from_address, to_address, subject, status, error) VALUES ($1,$2,$3,$4,$5,$6,$7)",
         [uid("eml"), orgId, from.address, msg.to, msg.subject.slice(0, 300), status, error]);
     try {
+      if (this.blockPrivateHosts) await assertPublicHost(m.smtp.host); // Le nom a pu changer de cible depuis son enregistrement
       const transport = nodemailer.createTransport({
         host: m.smtp.host, port: m.smtp.port, secure: m.smtp.security === "tls",
         ignoreTLS: m.smtp.security === "none", requireTLS: m.smtp.security === "starttls",

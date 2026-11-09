@@ -333,13 +333,14 @@ export class AiEngine {
     if (run.org_id) await this.svc.requirePerm(userId, run.org_id, "ai.approve");
     if (run.kind === "assistant") { if (run.requested_by !== userId) throw forbidden("Seule la personne qui a lancé l'assistant peut valider"); }
     else if (a.project_id) await this.svc.require(userId, a.project_id, "editor");
+    // Deux décisions simultanées : une seule l'emporte
+    if (!(await this.svc.db.one("UPDATE ai_approvals SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3 AND status = 'pending' RETURNING id", [approve ? "approved" : "rejected", userId, approvalId]))) throw badRequest("Cette demande a déjà été traitée");
     if (edits && approve) {
       // Retoucher, c'est changer le contenu : la cible reste celle qui a été soumise, sinon on agirait ailleurs avec les droits de l'IA
       const input = { ...a.input, ...Object.fromEntries(Object.entries(edits).filter(([k]) => !LOCKED_INPUTS.has(k))) };
       await this.svc.db.query("UPDATE ai_approvals SET input = $1, summary = $2 WHERE id = $3",
         [JSON.stringify(input), await this.tools.describe({ actorId: a.agent_id, orgId: run.org_id ?? "", ...(run.kind !== "assistant" && run.project_id ? { scope: { requesterId: run.requested_by, projectId: run.project_id } } : {}) }, a.tool, input), approvalId]);
     }
-    await this.svc.db.query("UPDATE ai_approvals SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3", [approve ? "approved" : "rejected", userId, approvalId]);
     await this.svc.db.query("UPDATE notifications SET read = TRUE WHERE approval_id = $1", [approvalId]);
     await this.svc.log(userId, approve ? "ai.approved" : "ai.rejected", { orgId: run.org_id, projectId: a.project_id, taskId: a.task_id, data: { summary: a.summary, agent: a.agent_id } });
     const w = this.waiters.get(approvalId);

@@ -36,6 +36,10 @@ export interface AppOptions {
 declare module "fastify" { interface FastifyRequest { userId: string; orgId: string; sessionId: string } }
 
 const ORG_COOKIE = "cadence_org";
+const Color = z.string().max(32);
+const Icon = z.string().max(40);
+const Domains = z.array(z.string().max(253)).max(20);
+const hasNul = (v: unknown): boolean => typeof v === "string" ? v.includes("\u0000") : Array.isArray(v) ? v.some(hasNul) : !!v && typeof v === "object" && !Buffer.isBuffer(v) && Object.values(v).some(hasNul);
 
 export async function buildApp(opts: AppOptions = {}) {
   const db: Db = await openDb({ url: opts.databaseUrl, dataDir: opts.dataDir });
@@ -56,14 +60,19 @@ export async function buildApp(opts: AppOptions = {}) {
   const importer = new Importer(svc, provider);
   await svc.backfillProfiles();
   const demoLogin = opts.demoLogin ?? process.env.CADENCE_DEMO === "1";
-  const secureCookies = process.env.NODE_ENV === "production" && !demoLogin;
+  // Tout serveur exposé en HTTPS est durci, pas seulement celui qui a NODE_ENV=production
+  const secureCookies = !demoLogin && (process.env.NODE_ENV === "production" || !!opts.publicUrl?.startsWith("https:"));
+  svc.requireAdminMfa = secureCookies;
+  mail.blockPrivateHosts = secureCookies;
   const authService = new Auth(svc);
   const access = new Access(svc, authService);
   const provisioning = new Provisioning(svc, authService, access, opts.publicUrl);
 
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: trustProxySetting(), requestTimeout: 120_000 });
   await app.register(cookie, { secret: cookieSecret() });
-  app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
+  const purge = setInterval(() => { void authService.purge().catch((err) => app.log.error(err)); }, 24 * HOUR);
+  purge.unref();
+  app.addHook("onClose", async () => { clearInterval(purge); detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
@@ -89,6 +98,10 @@ export async function buildApp(opts: AppOptions = {}) {
   });
   app.addHook("onRequest", async (req, reply) => {
     if (req.url.startsWith("/api/auth/") && !limiter.allow(`public:${req.ip}`, limits.anonymousPerMinute, MINUTE)) return tooMany(reply);
+  });
+  // PostgreSQL refuse ce caractère : autant le dire clairement que répondre par une erreur interne
+  app.addHook("preValidation", async (req, reply) => {
+    if (hasNul(req.params) || hasNul(req.query) || hasNul(req.body)) return reply.status(400).send({ error: "Caractère invalide dans la requête" });
   });
   const indexPath = opts.webDist ? join(opts.webDist, "index.html") : null;
   const inlineScripts = indexPath && existsSync(indexPath) ? [...readFileSync(indexPath, "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash("sha256").update(m[1].replace(/\r\n?/g, "\n")).digest("base64")}'`) : []; // Le navigateur normalise les fins de ligne avant de calculer l'empreinte
@@ -158,7 +171,9 @@ export async function buildApp(opts: AppOptions = {}) {
     privateAuthRoutes(r, authDeps);
     r.get("/api/me", async (req) => {
       const security = await db.one<{ platform_role: string | null; totp_enabled: boolean }>("SELECT platform_role, totp_enabled FROM users WHERE id = $1", [me(req)]);
-      return { ...(await svc.user(me(req))), org_id: org(req), orgs: await svc.orgsOf(me(req)), permissions: org(req) ? await svc.permissionsOf(me(req), org(req)) : [], platform_role: security?.platform_role ?? null, mfa_enabled: !!security?.totp_enabled };
+      const orgs = await svc.orgsOf(me(req));
+      const administers = !!security?.platform_role || ["owner", "admin"].includes(orgs.find((o) => o.id === org(req))?.role ?? "");
+      return { ...(await svc.user(me(req))), org_id: org(req), orgs, permissions: org(req) ? await svc.permissionsOf(me(req), org(req)) : [], platform_role: security?.platform_role ?? null, mfa_enabled: !!security?.totp_enabled, mfa_required: svc.requireAdminMfa && administers && !security?.totp_enabled };
     });
     r.get("/api/users", async (req) => svc.visibleUsers(me(req), org(req)));
 
@@ -187,7 +202,7 @@ export async function buildApp(opts: AppOptions = {}) {
     // ---------------------------------------------------------------- organisations, entités, équipes
     r.post("/api/orgs", async (req, reply) => {
       if (!demoLogin) await provisioning.requireSuperAdmin(me(req));
-      const o = await svc.createOrg(me(req), z.object({ name: z.string().min(1).max(120), domains: z.array(z.string()).optional() }).parse(req.body));
+      const o = await svc.createOrg(me(req), z.object({ name: z.string().min(1).max(120), domains: Domains.optional() }).parse(req.body));
       reply.setCookie(ORG_COOKIE, o.id, cookieOpts);
       return o;
     });
@@ -196,7 +211,7 @@ export async function buildApp(opts: AppOptions = {}) {
       reply.setCookie(ORG_COOKIE, req.params.id, cookieOpts);
       return { ok: true };
     });
-    r.patch("/api/org", async (req) => { await svc.updateOrg(me(req), org(req), z.object({ name: z.string().min(1).max(120).optional(), domains: z.array(z.string()).optional() }).parse(req.body)); return { ok: true }; });
+    r.patch("/api/org", async (req) => { await svc.updateOrg(me(req), org(req), z.object({ name: z.string().min(1).max(120).optional(), domains: Domains.optional() }).parse(req.body)); return { ok: true }; });
     r.put<{ Params: { userId: string } }>("/api/org/members/:userId", async (req) => {
       await svc.setOrgMember(me(req), org(req), req.params.userId, z.object({ role: z.enum(["owner", "admin", "member", "guest"]).nullable() }).parse(req.body).role);
       return { ok: true };
@@ -211,7 +226,7 @@ export async function buildApp(opts: AppOptions = {}) {
     r.patch<{ Params: { id: string } }>("/api/units/:id", async (req) => { await svc.updateUnit(me(req), req.params.id, UnitBody.partial().parse(req.body)); return { ok: true }; });
     r.delete<{ Params: { id: string } }>("/api/units/:id", async (req) => { await svc.deleteUnit(me(req), req.params.id); return { ok: true }; });
 
-    const TeamBody = z.object({ name: z.string().min(1).max(120), description: z.string().max(2000).optional(), visibility: z.enum(["public", "request", "private"]).optional(), unit_id: z.string().nullable().optional(), color: z.string().optional() });
+    const TeamBody = z.object({ name: z.string().min(1).max(120), description: z.string().max(2000).optional(), visibility: z.enum(["public", "request", "private"]).optional(), unit_id: z.string().nullable().optional(), color: Color.optional() });
     r.get("/api/teams", async (req) => svc.teams(me(req), org(req)));
     r.post("/api/teams", async (req) => svc.createTeam(me(req), org(req), TeamBody.parse(req.body)));
     r.get<{ Params: { id: string } }>("/api/teams/:id", async (req) => svc.team(me(req), req.params.id));
@@ -226,12 +241,12 @@ export async function buildApp(opts: AppOptions = {}) {
     // ---------------------------------------------------------------- projets
     r.get("/api/projects", async (req) => svc.listProjects(me(req), org(req), { archived: (req.query as { archived?: string }).archived === "true" }));
     r.post("/api/projects", async (req) => svc.createProject(me(req), org(req), z.object({
-      name: z.string().min(1).max(120), description: z.string().max(5000).optional(), color: z.string().optional(), icon: z.string().optional(), due_on: date.optional(),
+      name: z.string().min(1).max(120), description: z.string().max(5000).optional(), color: Color.optional(), icon: Icon.optional(), due_on: date.optional(),
       team_id: z.string().nullable().optional(), key: z.string().max(10).optional(), access: z.enum(["team", "private"]).optional(), sections: z.array(z.string().max(80)).max(20).optional(),
     }).parse(req.body)));
     r.get<{ Params: { id: string } }>("/api/projects/:id", async (req) => svc.getProject(me(req), req.params.id));
     r.patch<{ Params: { id: string } }>("/api/projects/:id", async (req) => svc.updateProject(me(req), req.params.id, z.object({
-      name: z.string().min(1).max(120).optional(), description: z.string().max(5000).optional(), color: z.string().optional(), icon: z.string().optional(),
+      name: z.string().min(1).max(120).optional(), description: z.string().max(5000).optional(), color: Color.optional(), icon: Icon.optional(),
       status: z.enum(["on_track", "at_risk", "off_track", "done"]).optional(), due_on: date.optional(), archived: z.boolean().optional(),
       team_id: z.string().nullable().optional(), access: z.enum(["team", "private"]).optional(),
     }).parse(req.body)));
@@ -246,7 +261,7 @@ export async function buildApp(opts: AppOptions = {}) {
       return db.query("SELECT * FROM activity WHERE project_id = $1 AND kind = 'project.update' ORDER BY created_at DESC LIMIT 20", [req.params.id]);
     });
     r.post<{ Params: { id: string } }>("/api/projects/:id/updates", async (req) => {
-      const body = z.object({ status: z.enum(["on_track", "at_risk", "off_track"]), headline: z.string().min(1), summary: z.string(), risks: z.array(z.string()), next_steps: z.array(z.string()), ai: z.boolean().optional() }).parse(req.body);
+      const body = z.object({ status: z.enum(["on_track", "at_risk", "off_track"]), headline: z.string().min(1).max(300), summary: z.string().max(5000), risks: z.array(z.string().max(1000)).max(30), next_steps: z.array(z.string().max(1000)).max(30), ai: z.boolean().optional() }).parse(req.body);
       await svc.updateProject(me(req), req.params.id, { status: body.status });
       await svc.log(me(req), "project.update", { projectId: req.params.id, data: body });
       for (const m of await svc.members(req.params.id)) if (m.user_id !== me(req) && !(await svc.user(m.user_id)).is_ai)
@@ -254,7 +269,7 @@ export async function buildApp(opts: AppOptions = {}) {
       return { ok: true };
     });
     r.post<{ Params: { id: string } }>("/api/projects/:id/sections", async (req) => svc.createSection(me(req), req.params.id, z.object({ name: z.string().max(80) }).parse(req.body).name));
-    r.patch<{ Params: { id: string } }>("/api/sections/:id", async (req) => svc.updateSection(me(req), req.params.id, z.object({ name: z.string().max(80).optional(), position: z.number().optional() }).parse(req.body)));
+    r.patch<{ Params: { id: string } }>("/api/sections/:id", async (req) => svc.updateSection(me(req), req.params.id, z.object({ name: z.string().max(80).optional(), position: z.number().min(-1e12).max(1e12).optional() }).parse(req.body)));
     r.post<{ Params: { id: string } }>("/api/sections/:id/move", async (req) => svc.moveSection(me(req), req.params.id, z.object({ direction: z.enum(["left", "right"]) }).parse(req.body).direction));
     r.delete<{ Params: { id: string } }>("/api/sections/:id", async (req) => { await svc.deleteSection(me(req), req.params.id); return { ok: true }; });
 
@@ -322,7 +337,7 @@ export async function buildApp(opts: AppOptions = {}) {
     // ---------------------------------------------------------------- boîte de réception & recherche
     r.get("/api/notifications", async (req) => svc.listNotifications(me(req), org(req)));
     r.post("/api/notifications/read", async (req) => { const b = z.object({ ids: z.array(z.string()).optional(), all: z.boolean().optional() }).parse(req.body); await svc.markRead(me(req), org(req), b.all ? "all" : b.ids ?? []); return { ok: true }; });
-    r.get("/api/search", async (req) => svc.search(me(req), org(req), z.object({ q: z.string().default("") }).parse(req.query).q));
+    r.get("/api/search", async (req) => svc.search(me(req), org(req), z.object({ q: z.string().max(200).default("") }).parse(req.query).q));
 
     // ---------------------------------------------------------------- IA
     r.get("/api/ai/status", async () => ({ provider: provider.name, model: provider.name === "anthropic" ? MODEL : null }));

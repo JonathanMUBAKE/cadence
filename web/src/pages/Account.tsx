@@ -61,21 +61,22 @@ function MfaCard() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["me"] });
   const start = () => api.post<{ secret: string; qr: string }>("/api/auth/mfa/setup").then(setSetup, failure);
   const confirm = () => api.post<{ recovery_codes: string[] }>("/api/auth/mfa/confirm", { code }).then((r) => { setRecovery(r.recovery_codes); setSetup(null); setCode(""); refresh(); }, failure);
-  const disable = () => api.post("/api/auth/mfa/disable", { password }).then(() => { setPassword(""); refresh(); toast.success("Double authentification désactivée"); }, failure);
+  const disable = () => api.post("/api/auth/mfa/disable", { password, code }).then(() => { setPassword(""); setCode(""); refresh(); toast.success("Double authentification désactivée"); }, failure);
   return (
     <Card icon={<ShieldCheck className="size-4 text-muted" />} title="Double authentification">
       {recovery ? (
         <div>
           <p className="text-[13.5px] font-medium">Conservez ces codes de secours en lieu sûr.</p>
           <p className="mt-0.5 text-[12.5px] text-muted">Chacun sert une seule fois si vous perdez votre téléphone. Ils ne seront plus jamais affichés.</p>
-          <ul className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-hover p-3 font-mono text-[13px] sm:grid-cols-5">{recovery.map((c) => <li key={c}>{c}</li>)}</ul>
+          <ul className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-hover p-3 font-mono text-[13px]">{recovery.map((c) => <li key={c}>{c}</li>)}</ul>
           <Button className="mt-3" onClick={() => setRecovery(null)}>J'ai conservé ces codes</Button>
         </div>
       ) : me?.mfa_enabled ? (
         <div>
           <Chip tone="success">Activée</Chip>
           <label className="mt-3 block text-[12.5px] text-muted">Pour la désactiver, confirmez votre mot de passe<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={field} /></label>
-          <Button variant="danger" className="mt-2" disabled={!password} onClick={disable}>Désactiver</Button>
+          <label className="mt-2 block text-[12.5px] text-muted">Et le code à 6 chiffres de votre application<input value={code} inputMode="numeric" autoComplete="one-time-code" onChange={(e) => setCode(e.target.value)} className={field} /></label>
+          <Button variant="danger" className="mt-2" disabled={!password || code.length < 6} onClick={disable}>Désactiver</Button>
         </div>
       ) : setup ? (
         <div>

@@ -51,14 +51,18 @@ describe("secrets", () => {
     expect(second.encryptionSecret()).toBe(value);
   });
 
-  it("chiffre sans le secret public et relit les mots de passe déjà enregistrés avec lui", async () => {
+  it("relit l'ancien format avec la clé courante, mais plus jamais avec le secret public", async () => {
     vi.stubEnv("CADENCE_SECRET_KEY", STRONG);
     const { open, seal } = await import("./crypto.js");
     expect(open(seal("mot-de-passe"))).toBe("mot-de-passe");
-    const iv = randomBytes(12);
-    const c = createCipheriv("aes-256-gcm", createHash("sha256").update(LEGACY_SECRET).digest(), iv);
-    const enc = Buffer.concat([c.update("ancien", "utf8"), c.final()]);
-    expect(open("v1:" + Buffer.concat([iv, c.getAuthTag(), enc]).toString("base64"))).toBe("ancien");
+    const v1 = (secret: string) => {
+      const iv = randomBytes(12);
+      const c = createCipheriv("aes-256-gcm", createHash("sha256").update(secret).digest(), iv);
+      const enc = Buffer.concat([c.update("ancien", "utf8"), c.final()]);
+      return "v1:" + Buffer.concat([iv, c.getAuthTag(), enc]).toString("base64");
+    };
+    expect(open(v1(STRONG))).toBe("ancien");
+    expect(() => open(v1(LEGACY_SECRET))).toThrow();
     expect(() => open("v1:" + randomBytes(48).toString("base64"))).toThrow();
   });
 

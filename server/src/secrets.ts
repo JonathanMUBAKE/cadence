@@ -42,6 +42,15 @@ export function trustProxySetting(value = process.env.TRUST_PROXY): boolean | st
   return (_address, hop) => hop < hops;
 }
 
+const TLS_DATABASE = /supabase\.(co|com)|sslmode=require/;
+
+/** Connexion chiffrée à la base : le certificat est vérifié dès qu'il est fourni. Il l'est obligatoirement en production. */
+export function sslOptions(url: string, ca = process.env.DATABASE_CA_CERT) {
+  if (!TLS_DATABASE.test(url)) return undefined;
+  if (ca) return { ca: ca.includes("BEGIN") ? ca : readFileSync(ca, "utf8"), rejectUnauthorized: true };
+  return { rejectUnauthorized: false };
+}
+
 /** Raisons de refuser le démarrage : une configuration dangereuse ne doit jamais tourner silencieusement. */
 export function startupProblems(env: Record<string, string | undefined>, o: { host: string; databaseUrl: boolean }): string[] {
   const out: string[] = [];
@@ -50,6 +59,8 @@ export function startupProblems(env: Record<string, string | undefined>, o: { ho
   if (env.CADENCE_DEMO === "1" && (production || exposed)) out.push("Le mode démo permet de se connecter sans mot de passe : il est réservé à un usage local. Retirez CADENCE_DEMO, ou retirez HOST et NODE_ENV=production.");
   if ((production || exposed) && !env.PUBLIC_URL) out.push("PUBLIC_URL est obligatoire : les liens d'invitation et de réinitialisation envoyés par e-mail en dépendent (ex. https://cadence.exemple.com).");
   if ((production || exposed) && !env.SMTP_URL) out.push("SMTP_URL est obligatoire : la messagerie de la plateforme est seule à prouver qu'une adresse e-mail appartient à la personne invitée.");
+  if ((production || exposed) && env.PUBLIC_URL && !env.PUBLIC_URL.startsWith("https://")) out.push("PUBLIC_URL doit commencer par https:// : sans chiffrement, les sessions et les mots de passe circulent en clair.");
+  if (production && TLS_DATABASE.test(env.DATABASE_URL ?? "") && !env.DATABASE_CA_CERT) out.push("DATABASE_CA_CERT est obligatoire : indiquez le certificat de la base pour vérifier son identité (Supabase : Project Settings → Database → SSL).");
   if (production || o.databaseUrl) {
     for (const name of ["COOKIE_SECRET", "CADENCE_SECRET_KEY"]) {
       if ((env[name]?.length ?? 0) < MIN_SECRET_LENGTH) out.push(`${name} est obligatoire ici et doit faire au moins ${MIN_SECRET_LENGTH} caractères.`);

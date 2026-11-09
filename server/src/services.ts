@@ -136,6 +136,7 @@ export type TaskPatch = Partial<Omit<TaskInput, "project_id" | "parent_id">> & {
 // Services : toute la logique métier, exécutée « au nom de » un acteur
 // ---------------------------------------------------------------------------
 export class Services {
+  requireAdminMfa = false;
   constructor(public db: Db, public bus: Bus) {}
 
   // ================================================================ utilisateurs
@@ -234,6 +235,12 @@ export class Services {
   async requirePerm(actorId: string, orgId: string, perm: Permission) {
     if ((await this.userOrNull(actorId))?.is_ai) return;
     if (!(await this.permissionsOf(actorId, orgId)).includes(perm)) throw forbidden(`Votre profil ne vous autorise pas à : ${permissionLabel(perm).toLowerCase()}`);
+    if (perm.startsWith("org.")) await this.assertAdminMfa(actorId);
+  }
+  /** Sur un serveur exposé, administrer exige la double authentification. */
+  async assertAdminMfa(actorId: string) {
+    if (!this.requireAdminMfa) return;
+    if (!(await this.db.one<{ on: boolean }>("SELECT TRUE AS on FROM users WHERE id = $1 AND totp_enabled", [actorId]))) throw forbidden("Activez la double authentification dans « Sécurité du compte » pour administrer");
   }
   async projectPerm(actorId: string, projectId: string, perm: Permission) {
     await this.requirePerm(actorId, await this.orgOfProject(projectId), perm);
@@ -714,8 +721,8 @@ export class Services {
   /** Résout « APP-12 », « #12 » (si non ambigu) ou un identifiant interne, parmi ce que l'acteur peut lire. */
   async resolveTaskId(actorId: string, ref: string, orgId?: string | null): Promise<string> {
     const s = String(ref).trim();
-    const byKey = s.match(/^([A-Za-z][A-Za-z0-9]{1,9})-(\d+)$/);
-    const byNum = s.match(/^#?(\d+)$/);
+    const byKey = s.match(/^([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,9})$/);
+    const byNum = s.match(/^#?(\d{1,9})$/);
     if (!byKey && !byNum) return s;
     const readable = await this.readableProjectIds(actorId, orgId ?? null, true);
     if (!readable.length) throw notFound(`Tâche ${s} introuvable`);
@@ -743,7 +750,7 @@ export class Services {
     if (f.due_before) add("t.due_on IS NOT NULL AND t.due_on <= ?::date", f.due_before);
     if (f.due_after) add("t.due_on IS NOT NULL AND t.due_on >= ?::date", f.due_after);
     if (f.priority) add("t.priority = ?", f.priority);
-    if (f.text) { params.push(`%${f.text}%`); where.push(`(t.title ILIKE $${params.length} OR t.description ILIKE $${params.length})`); }
+    if (f.text) { params.push(`%${f.text.replace(/[\\%_]/g, "\\$&")}%`); where.push(`(t.title ILIKE $${params.length} ESCAPE '\\' OR t.description ILIKE $${params.length} ESCAPE '\\')`); }
     // La liste d'un projet est complète : plafonnée, elle fausserait le tableau et les indicateurs
     params.push(f.limit !== undefined ? Math.max(1, Math.min(Number(f.limit) || 500, 1000)) : f.project_id ? null : 500);
     return (await this.db.query<Row>(`

@@ -15,6 +15,9 @@ const BAD_LOGIN = "E-mail ou mot de passe incorrect. Après plusieurs essais, le
 export const fingerprint = (token: string) => createHash("sha256").update(token).digest("hex");
 export const newToken = () => randomBytes(32).toString("base64url");
 export interface RequestInfo { ip: string; userAgent: string }
+/** Ce qu'une personne a tapé par erreur n'a pas à rester lisible dans les journaux. */
+export const maskEmail = (email: string) => { const [local, domain] = email.split("@"); return domain ? `${local.slice(0, 1)}***@${domain.slice(0, 253)}` : "***"; };
+const recoveryHash = (userId: string, code: string) => fingerprint(`${userId}:${code.toUpperCase()}`);
 interface AccountRow { id: string; email: string; name: string; password_hash: string | null; status: string; failed_logins: number; locked_until: string | null; totp_enabled: boolean; totp_secret: string | null; totp_last_step: string | number | null; recovery_codes: string[] }
 
 export class Auth {
@@ -85,7 +88,7 @@ export class Auth {
     const attemptId = await this.reserveAttempt(email, info.ip);
     const a = await this.account("email", email);
     const fail = async () => {
-      await this.record("login.failed", { userId: a?.id, ip: info.ip, data: { email: email.slice(0, 320) } });
+      await this.record("login.failed", { userId: a?.id, ip: info.ip, data: { email: maskEmail(email) } });
       throw new HttpError(401, BAD_LOGIN);
     };
     if (!a?.password_hash) { await burnPasswordTime(password); return fail(); }
@@ -122,14 +125,13 @@ export class Auth {
     if (failures === null) throw denied;
     const clean = code.trim();
     const step = matchTotp(open(a.totp_secret!), clean);
-    let ok = step !== null && step > Number(a.totp_last_step ?? 0);
-    if (ok) await this.svc.db.query("UPDATE users SET totp_last_step = $1 WHERE id = $2", [step, a.id]);
+    // Chaque code se consomme en une seule instruction : deux requêtes simultanées ne peuvent pas réussir toutes les deux
+    let ok = step !== null && !!(await this.svc.db.one("UPDATE users SET totp_last_step = $1::bigint WHERE id = $2 AND COALESCE(totp_last_step, 0) < $1::bigint RETURNING id", [step, a.id]));
     if (!ok && step === null) {
-      const remaining = a.recovery_codes.filter((c) => c !== fingerprint(clean.toUpperCase()));
-      if (remaining.length < a.recovery_codes.length) {
+      const used = await this.svc.db.one<{ remaining: number }>("UPDATE users SET recovery_codes = recovery_codes - $1::text WHERE id = $2 AND recovery_codes ? $1::text RETURNING jsonb_array_length(recovery_codes) AS remaining", [recoveryHash(a.id, clean), a.id]);
+      if (used) {
         ok = true;
-        await this.svc.db.query("UPDATE users SET recovery_codes = $1 WHERE id = $2", [JSON.stringify(remaining), a.id]);
-        await this.record("mfa.recovery_used", { userId: a.id, ip: info.ip, data: { remaining: remaining.length } });
+        await this.record("mfa.recovery_used", { userId: a.id, ip: info.ip, data: { remaining: used.remaining } });
       }
     }
     if (!ok) {
@@ -159,6 +161,7 @@ export class Auth {
   async changePassword(userId: string, sessionId: string, current: string, password: string, info: RequestInfo) {
     await this.assertPassword(userId, current);
     await this.setPassword(userId, password);
+    await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE user_id = $1 AND kind = 'reset' AND used_at IS NULL", [userId]);
     await this.revokeAll(userId, sessionId);
     await this.record("password.changed", { userId, ip: info.ip });
   }
@@ -179,17 +182,28 @@ export class Auth {
     if (!a?.totp_secret || a.totp_enabled) throw badRequest("Commencez par configurer la double authentification");
     const step = matchTotp(open(a.totp_secret), code.trim());
     if (step === null) throw badRequest("Code incorrect : vérifiez l'heure de votre téléphone");
-    const codes = [...Array(10)].map(() => randomBytes(5).toString("hex").toUpperCase());
-    await this.svc.db.query("UPDATE users SET totp_enabled = TRUE, totp_last_step = $1, recovery_codes = $2 WHERE id = $3", [step, JSON.stringify(codes.map(fingerprint)), userId]);
+    const codes = [...Array(10)].map(() => randomBytes(10).toString("hex").toUpperCase());
+    await this.svc.db.query("UPDATE users SET totp_enabled = TRUE, totp_last_step = $1, recovery_codes = $2 WHERE id = $3", [step, JSON.stringify(codes.map((c) => recoveryHash(userId, c))), userId]);
     await this.record("mfa.enabled", { userId, ip: info.ip });
     return { recovery_codes: codes };
   }
 
-  async disableMfa(userId: string, password: string, info: RequestInfo) {
+  /** Une session volée et un mot de passe ne suffisent pas : il faut aussi le téléphone. */
+  async disableMfa(userId: string, password: string, code: string, info: RequestInfo) {
     await this.assertPassword(userId, password);
+    const a = await this.account("id", userId);
+    if (!a?.totp_secret || matchTotp(open(a.totp_secret), code.trim()) === null) throw badRequest("Code incorrect");
     await this.clearMfa(userId);
     await this.record("mfa.disabled", { userId, ip: info.ip });
   }
+  /** Durées de conservation : 30 jours pour les traces techniques, un an pour le journal de sécurité. */
+  async purge() {
+    await this.svc.db.query("DELETE FROM login_attempts WHERE created_at < now() - interval '30 days'");
+    await this.svc.db.query("DELETE FROM security_events WHERE created_at < now() - interval '365 days'");
+    await this.svc.db.query("DELETE FROM sessions WHERE expires_at < now() - interval '30 days'");
+    await this.svc.db.query("DELETE FROM auth_tokens WHERE expires_at < now() - interval '30 days'");
+  }
+
   async clearMfa(userId: string) {
     await this.svc.db.query("UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, totp_last_step = NULL, recovery_codes = '[]', mfa_failures = 0, mfa_locked_until = NULL WHERE id = $1", [userId]);
   }

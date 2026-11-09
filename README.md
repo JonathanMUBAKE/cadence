@@ -90,7 +90,8 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | `ANTHROPIC_API_KEY` | Active Claude | mode démo |
 | `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
 | `HOST` | Adresse d'écoute. Toute autre valeur que l'ordinateur local exige `CADENCE_DEMO=1` | `127.0.0.1` |
-| `PUBLIC_URL` | Adresse publique, utilisée dans les liens envoyés par e-mail. **Obligatoire** en production ou sur le réseau | `http://localhost:PORT` |
+| `PUBLIC_URL` | Adresse publique en `https://`, utilisée dans les liens envoyés par e-mail. **Obligatoire** en production ou sur le réseau. En HTTPS, les administrateurs doivent activer la double authentification | `http://localhost:PORT` |
+| `DATABASE_CA_CERT` | Certificat de la base (contenu ou chemin), pour vérifier son identité. **Obligatoire** en production avec Supabase | non vérifié |
 | `CADENCE_DEMO` | `1` : données d'exemple et connexion sans mot de passe. Usage local uniquement, refusé en production | désactivé |
 | `TRUST_PROXY` | Derrière un proxy de confiance : nombre de proxys devant Cadence (`1` le plus souvent) ou leurs adresses (`10.0.0.0/8`) | désactivé |
 | `SMTP_URL`, `SMTP_FROM` | Messagerie de la plateforme, **seule à envoyer les invitations et les liens de réinitialisation**. **Obligatoire** en production ou sur le réseau | aucune |

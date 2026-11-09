@@ -20,7 +20,7 @@ export interface ServiceAddress {
 export interface EmailLogEntry { id: string; from_address: string; to_address: string; subject: string; status: "sent" | "failed"; error: string | null; created_at: string }
 export type OrgRole = "owner" | "admin" | "member" | "guest";
 export interface Organization { id: string; name: string; slug: string; domains: string[]; role: OrgRole }
-export interface Me extends User { org_id: string; orgs: Organization[]; permissions: string[]; platform_role: "super_admin" | null; mfa_enabled: boolean }
+export interface Me extends User { org_id: string; orgs: Organization[]; permissions: string[]; platform_role: "super_admin" | null; mfa_enabled: boolean; mfa_required: boolean }
 export interface PermissionGroup { group: string; items: { key: string; label: string }[] }
 export type BaseRole = "owner" | "admin" | "member" | "guest";
 export interface AccessProfile { id: string; name: string; description: string; base_role: BaseRole; permissions: string[]; is_system: boolean; member_count: number }

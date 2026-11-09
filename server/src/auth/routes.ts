@@ -58,7 +58,7 @@ export function privateAuthRoutes(r: FastifyInstance, d: AuthDeps) {
   });
   r.post("/api/auth/mfa/setup", async (req) => auth.startMfa(me(req)));
   r.post("/api/auth/mfa/confirm", async (req) => auth.confirmMfa(me(req), z.object({ code: z.string().min(6).max(10) }).parse(req.body).code, info(req)));
-  r.post("/api/auth/mfa/disable", async (req) => { await auth.disableMfa(me(req), z.object({ password }).parse(req.body).password, info(req)); return { ok: true }; });
+  r.post("/api/auth/mfa/disable", async (req) => { const b = z.object({ password, code: z.string().min(6).max(10) }).parse(req.body); await auth.disableMfa(me(req), b.password, b.code, info(req)); return { ok: true }; });
 
   // ---------------------------------------------------------------- invitations
   r.get("/api/org/invitations", async (req) => provisioning.listInvitations(me(req), org(req)));

@@ -270,9 +270,9 @@ describe("double authentification", () => {
   });
 
   it("désactiver la double authentification exige le mot de passe", async () => {
-    const { cookie } = await enroll();
-    expect((await api(cookie, "POST", "/api/auth/mfa/disable", { password: "faux-mot-de-passe-12" })).status).toBe(400);
-    expect((await api(cookie, "POST", "/api/auth/mfa/disable", { password: GOOD })).status).toBe(200);
+    const { cookie, secret } = await enroll();
+    expect((await api(cookie, "POST", "/api/auth/mfa/disable", { password: "faux-mot-de-passe-12", code: totpCode(secret) })).status).toBe(400);
+    expect((await api(cookie, "POST", "/api/auth/mfa/disable", { password: GOOD, code: totpCode(secret) })).status).toBe(200);
     expect((await login("nadia@exemple.test", GOOD)).body).toMatchObject({ status: "ok" });
   });
 });

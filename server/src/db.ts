@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { PGlite } from "@electric-sql/pglite";
+import { sslOptions } from "./secrets.js";
 
 /**
  * Accès PostgreSQL. Même SQL partout :
@@ -69,8 +70,7 @@ export async function openDb(opts: OpenOptions = {}): Promise<Db> {
     pg.types.setTypeParser(DATE, (v) => v);
     pg.types.setTypeParser(TIMESTAMPTZ, iso);
     pg.types.setTypeParser(TIMESTAMP, iso);
-    const ssl = /supabase\.(co|com)|sslmode=require/.test(opts.url) ? { rejectUnauthorized: false } : undefined;
-    db = new PgDb(new pg.Pool({ connectionString: opts.url, ssl, max: 10 }));
+    db = new PgDb(new pg.Pool({ connectionString: opts.url, ssl: sslOptions(opts.url), max: 10 }));
   } else {
     if (opts.dataDir) mkdirSync(opts.dataDir, { recursive: true });
     const lite = new PGlite({ dataDir: opts.dataDir, parsers: { [DATE]: (v: string) => v, [TIMESTAMPTZ]: iso, [TIMESTAMP]: iso } });

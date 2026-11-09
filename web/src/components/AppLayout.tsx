@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, Outlet, useLocation } from "react-router";
+import { Link, Navigate, Outlet, useLocation } from "react-router";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu as MenuIcon, Search, Sparkles } from "lucide-react";
 import { Sidebar, Logo } from "./Sidebar";
@@ -23,6 +23,12 @@ export function AppLayout() {
   // Un administrateur système n'appartient pas forcément à une organisation
   if (me.data && !me.data.orgs.length && !["/admin", "/account"].includes(loc.pathname)) return <Navigate to={me.data.platform_role ? "/admin" : "/account"} replace />;
   return <ShellProvider><Shell /></ShellProvider>;
+}
+
+function MfaReminder() {
+  const { data } = useMe();
+  if (!data?.mfa_required) return null;
+  return <p className="shrink-0 border-b border-line bg-panel px-4 py-2 text-[13px]">Pour administrer, activez d'abord la double authentification. <Link to="/account" className="font-medium underline">Configurer</Link></p>;
 }
 
 function Shell() {
@@ -55,6 +61,7 @@ function Shell() {
             <IconButton label="Cadence AI" onClick={() => shell.openAssistant()} className="text-ai-fg"><Sparkles className="size-4" /></IconButton>
           </div>
         </div>
+        <MfaReminder />
         <PendingInvitations />
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />
