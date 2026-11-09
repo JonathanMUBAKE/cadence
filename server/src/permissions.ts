@@ -15,7 +15,7 @@ export const PERMISSION_GROUPS = [
     { key: "ai.assistant", label: "Utiliser l'assistant" }, { key: "ai.delegate", label: "Confier du travail à l'IA" },
     { key: "ai.approve", label: "Valider les actions de l'IA" }, { key: "ai.rules", label: "Gérer les règles IA" },
   ] },
-  { group: "Équipes", items: [{ key: "teams.create", label: "Créer des équipes" }, { key: "teams.manage", label: "Gérer les équipes dont on est responsable" }] },
+  { group: "Équipes", items: [{ key: "teams.create", label: "Créer des équipes" }, { key: "teams.join", label: "Rejoindre des équipes" }, { key: "teams.manage", label: "Gérer les équipes dont on est responsable" }] },
   { group: "Administration de l'organisation", items: [
     { key: "org.settings", label: "Modifier l'organisation" }, { key: "org.structure", label: "Gérer l'organigramme" }, { key: "org.members", label: "Inviter et gérer les personnes" },
     { key: "org.profiles", label: "Gérer les profils et les droits" }, { key: "org.mail", label: "Configurer la messagerie" },
@@ -31,7 +31,7 @@ export const permissionLabel = (p: string) => LABELS.get(p) ?? p;
 export const isPermission = (p: string): p is Permission => LABELS.has(p);
 
 const ADMIN_ONLY = (p: Permission) => p.startsWith("org.");
-const NOT_FOR_GUESTS = new Set<Permission>(["projects.create", "projects.import", "teams.create", "teams.manage"]);
+const NOT_FOR_GUESTS = new Set<Permission>(["projects.create", "projects.import", "teams.create", "teams.join", "teams.manage"]);
 
 /** Droits des quatre profils créés avec chaque organisation : ils reproduisent les rôles historiques. */
 export const SYSTEM_PROFILES: { role: BaseRole; name: string; description: string; permissions: Permission[] }[] = [

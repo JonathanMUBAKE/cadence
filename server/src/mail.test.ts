@@ -146,9 +146,10 @@ describe("photos de profil", () => {
     const big = Buffer.concat([Buffer.from(PNG, "base64"), Buffer.alloc(600 * 1024)]).toString("base64");
     expect((await api("u_karim", "PUT", "/api/users/u_karim/avatar", { data_url: `data:image/png;base64,${big}` })).status).toBe(413);
   });
-  it("seul l'intéressé ou un administrateur change une photo", async () => {
+  it("seul l'intéressé change sa photo ; l'administrateur garde la main sur les coéquipiers IA", async () => {
     expect((await api("u_karim", "PUT", "/api/users/u_alice/avatar", { data_url: `data:image/png;base64,${PNG}` })).status).toBe(403);
-    expect((await api("u_alice", "PUT", "/api/users/u_karim/avatar", { data_url: `data:image/png;base64,${PNG}` })).status).toBe(200);
+    expect((await api("u_alice", "PUT", "/api/users/u_karim/avatar", { data_url: `data:image/png;base64,${PNG}` })).status).toBe(403);
+    expect((await api("u_karim", "PUT", "/api/users/u_karim/avatar", { data_url: `data:image/png;base64,${PNG}` })).status).toBe(200);
     expect((await api("u_alice", "PUT", "/api/users/ai_atlas/avatar", { data_url: `data:image/png;base64,${PNG}` })).status).toBe(200);
     expect((await api("u_karim", "DELETE", "/api/users/u_karim/avatar")).status).toBe(200);
     const karim = ((await api("u_alice", "GET", "/api/users")).body as { id: string; avatar_url: string | null }[]).find((u) => u.id === "u_karim")!;

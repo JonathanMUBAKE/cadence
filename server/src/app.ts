@@ -54,7 +54,7 @@ export async function buildApp(opts: AppOptions = {}) {
   const secureCookies = process.env.NODE_ENV === "production" && !demoLogin;
   const authService = new Auth(svc);
   const access = new Access(svc, authService);
-  const provisioning = new Provisioning(svc, authService, mail, access, opts.publicUrl);
+  const provisioning = new Provisioning(svc, authService, access, opts.publicUrl);
 
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: trustProxySetting() });
   await app.register(cookie, { secret: cookieSecret() });
@@ -131,7 +131,7 @@ export async function buildApp(opts: AppOptions = {}) {
   if (demoLogin) app.get("/api/auth/users", async () => (await db.query("SELECT id, name, title, avatar_color, is_ai, avatar_version FROM users WHERE NOT is_ai AND status = 'active' ORDER BY name")).map(withAvatar));
 
   app.register(async (r) => {
-    r.addHook("preHandler", auth);
+    r.addHook("onRequest", auth); // Avant la lecture du corps : un anonyme ne doit pas pouvoir faire charger 25 Mo en mémoire
     const me = (req: FastifyRequest) => req.userId;
     const org = (req: FastifyRequest) => req.orgId;
     const Priority = z.enum(["none", "low", "medium", "high", "urgent"]);

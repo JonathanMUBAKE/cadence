@@ -93,7 +93,7 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | `PUBLIC_URL` | Adresse publique, utilisée dans les liens envoyés par e-mail. **Obligatoire** en production ou sur le réseau | `http://localhost:PORT` |
 | `CADENCE_DEMO` | `1` : données d'exemple et connexion sans mot de passe. Usage local uniquement, refusé en production | désactivé |
 | `TRUST_PROXY` | Derrière un proxy de confiance : nombre de proxys devant Cadence (`1` le plus souvent) ou leurs adresses (`10.0.0.0/8`) | désactivé |
-| `SMTP_URL`, `SMTP_FROM` | Messagerie de la plateforme, **seule à envoyer les liens de réinitialisation**. Sans elle, l'administrateur système génère le lien. Sert aussi de secours aux organisations sans SMTP | aucune |
+| `SMTP_URL`, `SMTP_FROM` | Messagerie de la plateforme, **seule à envoyer les invitations et les liens de réinitialisation**. **Obligatoire** en production ou sur le réseau | aucune |
 | `CADENCE_BOOTSTRAP` | `1` : réaffiche au démarrage le lien de création d'un administrateur système | désactivé |
 | `COOKIE_SECRET` | Signature des sessions, 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` | généré dans `server/.cadence-secret` |
 | `CADENCE_SECRET_KEY` | Clé de chiffrement des secrets en base (mot de passe SMTP), 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` : la changer rend les mots de passe enregistrés illisibles. | `COOKIE_SECRET`, sinon le secret local |
@@ -137,7 +137,7 @@ web/src
 
 **Premier démarrage.** Le serveur affiche un lien, valable 24 heures, pour créer l'**administrateur système**. Si l'adresse saisie correspond à un compte existant, ce compte est élevé à ce rôle. En cas de perte d'accès : `CADENCE_BOOTSTRAP=1`.
 
-**Création des comptes.** Sur invitation par défaut : un administrateur saisit l'adresse, la personne reçoit un lien à usage unique, valable 72 heures, et choisit son mot de passe. En option (console **Administration → Inscriptions**), les visiteurs peuvent demander un accès : rien n'est ouvert avant validation, qui déclenche la même invitation.
+**Création des comptes.** Sur invitation par défaut : un administrateur saisit l'adresse, la personne reçoit par e-mail un lien à usage unique, valable 72 heures, et choisit son mot de passe. Un compte qui existe déjà reçoit une invitation à accepter ou refuser : personne n'entre dans une organisation sans son accord. En option (console **Administration → Inscriptions**), les visiteurs peuvent demander un accès : rien n'est ouvert avant validation, qui déclenche la même invitation.
 
 **Protections.** Mots de passe hachés avec scrypt (paramètres OWASP) et contrôlés selon les règles du NIST ; sessions opaques dont seule l'empreinte est stockée, révocables, expirant après 7 jours d'inactivité ou 30 jours ; double authentification TOTP avec codes de secours ; verrouillage progressif des comptes et limitation par adresse IP ; réponses identiques qu'un compte existe ou non ; contrôle de l'origine des requêtes ; en-têtes CSP, HSTS, X-Frame-Options ; journal de sécurité.
 

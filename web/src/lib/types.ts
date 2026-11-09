@@ -26,7 +26,8 @@ export type BaseRole = "owner" | "admin" | "member" | "guest";
 export interface AccessProfile { id: string; name: string; description: string; base_role: BaseRole; permissions: string[]; is_system: boolean; member_count: number }
 export interface MemberAccess { role: BaseRole; profile_id: string | null; overrides: Record<string, boolean>; profile_permissions: string[]; effective: string[] }
 export interface Invitation { id: string; name: string; email: string; profile_id: string | null; profile_name: string | null; created_at: string }
-export interface InviteResult { user_id: string; sent: boolean; link?: string; already_active?: boolean; awaiting_activation?: boolean }
+export interface InviteResult { sent: boolean; link?: string }
+export interface ReceivedInvitation { id: string; org_name: string; profile_name: string; created_at: string }
 export interface SessionInfo { id: string; ip: string | null; user_agent: string | null; created_at: string; last_seen_at: string; current: boolean }
 export interface AdminUser { id: string; name: string; email: string; status: "active" | "invited" | "pending" | "suspended" | "rejected"; platform_role: string | null; totp_enabled: boolean; last_login_at: string | null; access_request_note: string | null; active_sessions: number; orgs: { org_id: string; org_name: string; role: string }[] }
 export interface AdminOrg { id: string; name: string; profiles: { id: string; name: string; base_role: BaseRole }[] }

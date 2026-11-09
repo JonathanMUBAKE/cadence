@@ -29,15 +29,16 @@ const profileId = async (name: string) => (await api("u_alice", "GET", "/api/org
 async function invite(email = "nadia@exemple.test", profile?: string) {
   const r = await api("u_alice", "POST", "/api/org/invitations", { email, name: "Nadia Keita", profile_id: profile ?? await profileId("Membre") });
   expect(r.status).toBe(200);
-  return r.body as { user_id: string; sent: boolean; link: string };
+  return r.body as { invitation_id: string; sent: boolean; link: string };
 }
+const userIdOf = async (email: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]))!.id;
 async function activated(email = "nadia@exemple.test", profile?: string) {
   const i = await invite(email, profile);
   expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(200);
   const l = await login(email, GOOD);
   expect(l.status).toBe(200);
   cookies[email] = cookieOf(l);
-  return i.user_id;
+  return userIdOf(email);
 }
 
 describe("mots de passe", () => {
@@ -210,9 +211,10 @@ describe("invitations", () => {
   it("annule une invitation en attente", async () => {
     const i = await invite();
     expect((await api("u_alice", "GET", "/api/org/invitations")).body).toHaveLength(1);
-    await api("u_alice", "DELETE", `/api/org/invitations/${i.user_id}`);
+    const id = await userIdOf("nadia@exemple.test");
+    await api("u_alice", "DELETE", `/api/org/invitations/${i.invitation_id}`);
     expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(400);
-    expect(await ctx.db.one("SELECT 1 FROM users WHERE id = $1", [i.user_id])).toBeUndefined();
+    expect(await ctx.db.one("SELECT 1 FROM users WHERE id = $1", [id])).toBeUndefined();
   });
 });
 

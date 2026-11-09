@@ -7,6 +7,7 @@ import { TaskDrawer } from "./TaskDrawer";
 import { Assistant } from "./Assistant";
 import { CommandPalette } from "./CommandPalette";
 import { NewProjectDialog, QuickAddDialog } from "./dialogs";
+import { PendingInvitations } from "./PendingInvitations";
 import { IconButton, Spinner } from "./ui";
 import { useLiveUpdates, useMe } from "@/lib/hooks";
 import { ShellProvider, useShell } from "@/lib/shell";
@@ -54,6 +55,7 @@ function Shell() {
             <IconButton label="Cadence AI" onClick={() => shell.openAssistant()} className="text-ai-fg"><Sparkles className="size-4" /></IconButton>
           </div>
         </div>
+        <PendingInvitations />
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />
         </div>

@@ -168,13 +168,13 @@ export function InvitationsPanel() {
   const options = (profiles ?? []).filter((p) => p.base_role !== "owner");
   const profileId = options.some((p) => p.id === profile) ? profile : options.find((p) => p.base_role === "member")?.id ?? options[0]?.id ?? "";
   const refresh = () => { qc.invalidateQueries({ queryKey: ["invitations"] }); qc.invalidateQueries({ queryKey: ["users"] }); };
-  const report = (r: InviteResult) => { refresh(); if (r.link) setLink(r); else toast.success(r.already_active ? "Personne ajoutée à l'organisation" : r.awaiting_activation ? "Personne ajoutée : son compte attend l'activation lancée par une autre organisation" : "Invitation envoyée"); };
+  const report = (r: InviteResult) => { refresh(); if (r.link) setLink(r); else if (r.sent) toast.success("Invitation envoyée"); else toast.error("L'e-mail n'a pas pu partir : l'invitation reste en attente, renvoyez-la plus tard"); };
   const invite = () => api.post<InviteResult>("/api/org/invitations", { email, name, profile_id: profileId }).then((r) => { setEmail(""); setName(""); report(r); }, failure);
   return (
     <section className="mt-5 rounded-2xl border border-line bg-panel p-5 shadow-sm">
       {link && <LinkResult result={link} onClose={() => setLink(null)} />}
       <h3 className="flex items-center gap-2 text-[14px] font-semibold"><UserPlus className="size-4 text-muted" />Inviter une personne</h3>
-      <p className="mt-0.5 text-[12.5px] text-muted">Elle recevra un lien personnel, valable 72 heures, pour choisir son mot de passe.</p>
+      <p className="mt-0.5 text-[12.5px] text-muted">Elle reçoit un e-mail et rejoint l'organisation une fois l'invitation acceptée, sous 72 heures.</p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_180px_auto]">
         <input aria-label="Nom complet" placeholder="Nom complet" value={name} onChange={(e) => setName(e.target.value)} className={field} />
         <input aria-label="Adresse e-mail" type="email" placeholder="Adresse e-mail" value={email} onChange={(e) => setEmail(e.target.value)} className={field} />

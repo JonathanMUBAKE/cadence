@@ -199,7 +199,7 @@ function People({ units, isAdmin, canManage, canStructure }: { units: OrgUnit[];
         <tbody>
           {(people ?? []).filter((u) => u.id !== "ai_cadence").map((u) => (
             <tr key={u.id} className="border-b border-line last:border-b-0">
-              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><AvatarUpload compact user={u} size={30} editable={isAdmin || u.id === me?.id} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.status === "invited" ? "Invitation en attente" : u.title}</span></span></span></td>
+              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><AvatarUpload compact user={u} size={30} editable={u.id === me?.id || (isAdmin && u.is_ai)} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.title}</span></span></span></td>
               <td className="px-2">
                 {canManage && profiles?.length && !u.is_ai
                   ? <select aria-label={`Profil de ${u.name}`} disabled={u.id === me?.id} value={u.profile_id ?? ""} className={sel} onChange={(e) => set(`/api/org/members/${u.id}/profile`, { profile_id: e.target.value }, "Profil mis à jour")}>

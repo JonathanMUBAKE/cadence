@@ -144,7 +144,7 @@ export function useLiveUpdates(enabled: boolean) {
     const onMessage = (m: MessageEvent<string>) => {
       const e = JSON.parse(m.data) as Live;
       if (e.type === "ai.delta") { deltaListeners.forEach((fn) => fn(e.runId!, e.delta!)); return; }
-      if (e.type === "notification") return queue(["notifications"]);
+      if (e.type === "notification") return queue(["notifications"], ["my-invitations"]);
       if (e.type === "org.changed") return queue(["units"], ["teams"], ["team"], ["users"], ["projects"], ["me"]);
       if (e.type.startsWith("ai.")) {
         queue(["runs"], ["run", e.runId], ["approvals"]);

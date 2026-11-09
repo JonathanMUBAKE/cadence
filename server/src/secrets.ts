@@ -49,6 +49,7 @@ export function startupProblems(env: Record<string, string | undefined>, o: { ho
   const exposed = !LOOPBACK.has(o.host);
   if (env.CADENCE_DEMO === "1" && (production || exposed)) out.push("Le mode démo permet de se connecter sans mot de passe : il est réservé à un usage local. Retirez CADENCE_DEMO, ou retirez HOST et NODE_ENV=production.");
   if ((production || exposed) && !env.PUBLIC_URL) out.push("PUBLIC_URL est obligatoire : les liens d'invitation et de réinitialisation envoyés par e-mail en dépendent (ex. https://cadence.exemple.com).");
+  if ((production || exposed) && !env.SMTP_URL) out.push("SMTP_URL est obligatoire : la messagerie de la plateforme est seule à prouver qu'une adresse e-mail appartient à la personne invitée.");
   if (production || o.databaseUrl) {
     for (const name of ["COOKIE_SECRET", "CADENCE_SECRET_KEY"]) {
       if ((env[name]?.length ?? 0) < MIN_SECRET_LENGTH) out.push(`${name} est obligatoire ici et doit faire au moins ${MIN_SECRET_LENGTH} caractères.`);

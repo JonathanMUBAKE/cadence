@@ -46,6 +46,23 @@
 - `GET /api/events` n'est pas dans la matrice, car le flux reste ouvert. Son isolation est prouvée par le scénario F1 ; le rejet anonyme vient du même contrôle que les autres routes (lecture du code).
 - L'interface web n'a pas fait l'objet d'un test d'intrusion.
 
+### Suivi des corrections
+
+**Lot 1 corrigé** (Q-02, T-01, T-02, A-01, R-01), avec les choix D1, D2 et D4 proposés. La suite passe à 203 tests et la matrice de l'annexe A compte désormais 113 routes.
+
+| ID | Avant | Après (scénario rejoué) |
+| --- | --- | --- |
+| T-01 | L'attaquant devient administrateur de l'organisation A | Aucun lien reçu, activation 400, connexion 401, aucun rattachement |
+| T-02 | Compte ajouté, photo supprimée, adresse obtenue | 404 sur le compte et l'agent, photo intacte, adresse non obtenue |
+| A-01 | Aucune réponse avant la fin du corps | 401 en 9 ms, 16 Mo côté serveur pour 12 envois de 25 Mo |
+| R-01 | `viewer` devenu `editor` | Reste `viewer`, création refusée ; `teams.join` exigé |
+
+**Limites restantes du lot 1.**
+- En usage local sans SMTP, le lien d'une adresse inconnue reste affiché à l'administrateur : aucune preuve d'adresse n'y est possible. Le démarrage en production ou sur le réseau exige désormais `SMTP_URL`.
+- Les agents IA restent ceux des données de démonstration : ils ne peuvent plus changer d'organisation, mais la création d'agents par organisation relève du lot D4 du plan de travail.
+- Les profils personnalisés existants ne reçoivent pas `teams.join` : il faut le cocher. Les profils système l'obtiennent par la migration 009.
+- Une organisation peut faire envoyer des invitations à n'importe quelle adresse par le SMTP de la plateforme : à plafonner avec A-02.
+
 ---
 
 ## 1. Architecture multi-tenant
@@ -176,7 +193,7 @@ La base ne protège aucune frontière entre organisations :
 
 Le contrôle est un `preHandler`, qui s'exécute **après** la lecture du corps ([app.ts:134](../server/src/app.ts)).
 
-**Reproduit sur un vrai serveur.** Un anonyme envoie 1 Ko sur 20 Mo annoncés : aucune réponse tant que le corps n'est pas complet. 12 envois anonymes de 25 Mo : tous finissent en 401, mais **831 Mo de mémoire** ont été consommés. Quelques requêtes sans compte suffisent à faire tomber une petite instance.
+**Reproduit sur un vrai serveur.** Un anonyme envoie 1 Ko sur 20 Mo annoncés : aucune réponse tant que le corps n'est pas complet. 12 envois anonymes de 25 Mo finissent tous en 401, après mise en mémoire de leur contenu, soit jusqu'à 300 Mo côté serveur. Quelques requêtes sans compte suffisent à faire tomber une petite instance. *Correction : le chiffre de 831 Mo publié d'abord incluait le client de test, qui tournait dans le même processus.*
 
 #### A-02 · Élevé · Aucune limite de débit ni de quota
 
@@ -310,8 +327,8 @@ Codes HTTP réels. `P2a` lecteur strict, `P2b` lecteur membre, `P2c` lecteur inv
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `GET /api/me` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
 | `GET /api/users` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
-| `PUT /api/users/:id/avatar` | 401 | 403 | 403 | 403 | 403 | 200 | 200 |
-| `DELETE /api/users/:id/avatar` | 401 | 403 | 403 | 403 | 403 | 200 | 200 |
+| `PUT /api/users/:id/avatar` | 401 | 403 | 403 | 403 | 403 | 403 | 403 |
+| `DELETE /api/users/:id/avatar` | 401 | 403 | 403 | 403 | 403 | 403 | 403 |
 | `GET /api/avatars/:id` | 401 | 404 | 404 | 404 | 404 | 404 | 404 |
 | `GET /api/org/mail` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
 | `PUT /api/org/mail` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
@@ -322,7 +339,7 @@ Codes HTTP réels. `P2a` lecteur strict, `P2b` lecteur membre, `P2c` lecteur inv
 | `POST /api/orgs` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
 | `POST /api/orgs/:id/switch` | 401 | 200 | 200 | 200 | 403 | 200 | 200 |
 | `PATCH /api/org` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
-| `PUT /api/org/members/:userId` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
+| `PUT /api/org/members/:userId` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
 | `PUT /api/org/members/:userId/unit` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
 | `GET /api/org/units` | 401 | 200 | 200 | 403 | 200 | 200 | 200 |
 | `POST /api/org/units` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
@@ -333,7 +350,7 @@ Codes HTTP réels. `P2a` lecteur strict, `P2b` lecteur membre, `P2c` lecteur inv
 | `GET /api/teams/:id` | 401 | 200 | 200 | 403 | 403 | 200 | 200 |
 | `PATCH /api/teams/:id` | 401 | 403 | 403 | 403 | 403 | 200 | 200 |
 | `PUT /api/teams/:id/members/:userId` | 401 | 403 | 403 | 403 | 403 | 200 | 200 |
-| `POST /api/teams/:id/join` | 401 | 200 | 200 | 403 | 403 | 200 | 200 |
+| `POST /api/teams/:id/join` | 401 | 403 | 200 | 403 | 403 | 200 | 200 |
 | `POST /api/team-requests/:id` | 401 | 403 | 403 | 403 | 403 | 200 | 200 |
 | `GET /api/projects` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
 | `POST /api/projects` | 401 | 403 | 200 | 403 | 200 | 200 | 200 |
@@ -396,16 +413,19 @@ Codes HTTP réels. `P2a` lecteur strict, `P2b` lecteur membre, `P2c` lecteur inv
 | `POST /api/auth/mfa/disable` | 401 | 400 | 400 | 400 | 400 | 400 | 400 |
 | `GET /api/org/invitations` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
 | `POST /api/org/invitations` | 401 | 403 | 403 | 403 | 400 | 200 | 200 |
-| `POST /api/org/invitations/:userId/resend` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
-| `DELETE /api/org/invitations/:userId` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
+| `POST /api/org/invitations/:id/resend` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
+| `DELETE /api/org/invitations/:id` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
+| `GET /api/invitations` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
+| `POST /api/invitations/:id/accept` | 401 | 404 | 404 | 404 | 404 | 404 | 404 |
+| `POST /api/invitations/:id/decline` | 401 | 404 | 404 | 404 | 404 | 404 | 404 |
 | `GET /api/org/permissions` | 401 | 200 | 200 | 200 | 200 | 200 | 200 |
 | `GET /api/org/profiles` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
 | `POST /api/org/profiles` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
 | `PATCH /api/org/profiles/:id` | 401 | 403 | 403 | 403 | 400 | 200 | 200 |
 | `DELETE /api/org/profiles/:id` | 401 | 403 | 403 | 403 | 400 | 200 | 200 |
-| `PUT /api/org/members/:userId/profile` | 401 | 403 | 403 | 403 | 400 | 200 | 200 |
-| `GET /api/org/members/:userId/access` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
-| `PUT /api/org/members/:userId/permissions` | 401 | 403 | 403 | 403 | 200 | 200 | 200 |
+| `PUT /api/org/members/:userId/profile` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
+| `GET /api/org/members/:userId/access` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
+| `PUT /api/org/members/:userId/permissions` | 401 | 403 | 403 | 403 | 404 | 200 | 200 |
 | `GET /api/admin/users` | 401 | 403 | 403 | 403 | 403 | 403 | 403 |
 | `GET /api/admin/orgs` | 401 | 403 | 403 | 403 | 403 | 403 | 403 |
 | `GET /api/admin/events` | 401 | 403 | 403 | 403 | 403 | 403 | 403 |

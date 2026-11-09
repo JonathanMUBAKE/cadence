@@ -24,7 +24,8 @@ const orgId = async () => (await ctx.db.one<{ id: string }>("SELECT id FROM orga
 const projectId = async (name: string) => (await ctx.db.one<{ id: string }>("SELECT id FROM projects WHERE name LIKE $1", [`%${name}%`]))!.id;
 const profileId = async (name: string) => (await api("u_alice", "GET", "/api/org/profiles")).body.find((p: { name: string }) => p.name === name).id as string;
 const statusOf = async (id: string) => (await ctx.db.one<{ status: string }>("SELECT status FROM users WHERE id = $1", [id]))!.status;
-const invite = async (email = "nadia@exemple.test") => (await api("u_alice", "POST", "/api/org/invitations", { email, name: "Nadia Keita", profile_id: await profileId("Membre") })).body as { user_id: string; sent: boolean; link: string };
+const invite = async (email = "nadia@exemple.test") => (await api("u_alice", "POST", "/api/org/invitations", { email, name: "Nadia Keita", profile_id: await profileId("Membre") })).body as { invitation_id: string; sent: boolean; link: string };
+const idOf = async (email = "nadia@exemple.test") => (await ctx.db.one<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]))!.id;
 async function activated(email = "nadia@exemple.test") {
   const i = await invite(email);
   expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(200);
@@ -58,24 +59,25 @@ describe("liens d'activation entre organisations", () => {
     expect(r.status).toBe(200);
     expect(r.body.link).toBeUndefined();
     expect(r.body.sent).toBe(false);
-    expect((await api("other", "POST", `/api/org/invitations/${i.user_id}/resend`)).status).toBe(403);
+    expect((await api("other", "POST", `/api/org/invitations/${r.body.invitation_id}/resend`)).body.link).toBeUndefined();
     expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(200);
-    const orgs = (await api(cookieOf(await login("nadia@exemple.test", GOOD)), "GET", "/api/me")).body.orgs;
-    expect(orgs).toHaveLength(2);
+    const c = cookieOf(await login("nadia@exemple.test", GOOD));
+    expect((await api(c, "GET", "/api/me")).body.orgs).toHaveLength(1);
+    expect((await api(c, "GET", "/api/invitations")).body).toHaveLength(1);
   });
 
   it("l'organisation d'origine peut toujours renvoyer le lien", async () => {
     const i = await invite();
     const org = await otherOrg();
     await api("other", "POST", "/api/org/invitations", { email: "nadia@exemple.test", name: "Nadia", profile_id: `prf_member_${org}` });
-    expect(tokenOf((await api("u_alice", "POST", `/api/org/invitations/${i.user_id}/resend`)).body.link)).toBeTruthy();
+    expect(tokenOf((await api("u_alice", "POST", `/api/org/invitations/${i.invitation_id}/resend`)).body.link)).toBeTruthy();
   });
 
   it("une autre organisation ne peut pas annuler le lien d'origine", async () => {
     const i = await invite();
     const org = await otherOrg();
-    await api("other", "POST", "/api/org/invitations", { email: "nadia@exemple.test", name: "Nadia", profile_id: `prf_member_${org}` });
-    expect((await api("other", "DELETE", `/api/org/invitations/${i.user_id}`)).status).toBe(200);
+    const theirs = await api("other", "POST", "/api/org/invitations", { email: "nadia@exemple.test", name: "Nadia", profile_id: `prf_member_${org}` });
+    expect((await api("other", "DELETE", `/api/org/invitations/${theirs.body.invitation_id}`)).status).toBe(200);
     expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(200);
   });
 
@@ -83,9 +85,10 @@ describe("liens d'activation entre organisations", () => {
     await suspend("u_ines");
     const org = await otherOrg();
     const r = await api("other", "POST", "/api/org/invitations", { email: "ines@cadence.app", name: "x", profile_id: `prf_member_${org}` });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200); // Même réponse que pour une adresse inconnue : rien n'est révélé
     expect(r.body.link).toBeUndefined();
     expect(await statusOf("u_ines")).toBe("suspended");
+    expect(await ctx.svc.orgRole("u_ines", org)).toBeNull();
   });
 });
 
@@ -94,23 +97,26 @@ describe("suspension", () => {
 
   it("annule les liens déjà émis", async () => {
     const i = await invite();
-    await suspend(i.user_id);
+    const id = await idOf();
+    await suspend(id);
     expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(400);
-    expect(await statusOf(i.user_id)).toBe("suspended");
+    expect(await statusOf(id)).toBe("suspended");
   });
 
   it("refuse un lien de réinitialisation émis avant la suspension, même si le jeton a survécu", async () => {
-    const i = await activated();
-    const { link } = await ctx.provisioning.resetLink(i.user_id);
-    await ctx.db.query("UPDATE users SET status = 'suspended' WHERE id = $1", [i.user_id]);
+    await activated();
+    const id = await idOf();
+    const { link } = await ctx.provisioning.resetLink(id);
+    await ctx.db.query("UPDATE users SET status = 'suspended' WHERE id = $1", [id]);
     expect((await api(null, "POST", "/api/auth/reset", { token: tokenOf(link), password: "licorne-tournevis-fanfare-77" })).status).toBe(400);
   });
 
   it("refuse d'activer un compte qui n'est plus en attente d'activation", async () => {
     const i = await invite();
-    await ctx.db.query("UPDATE users SET status = 'suspended' WHERE id = $1", [i.user_id]);
+    const id = await idOf();
+    await ctx.db.query("UPDATE users SET status = 'suspended' WHERE id = $1", [id]);
     expect((await api(null, "POST", "/api/auth/activate", { token: tokenOf(i.link), password: GOOD })).status).toBe(400);
-    expect(await statusOf(i.user_id)).toBe("suspended");
+    expect(await statusOf(id)).toBe("suspended");
   });
 });
 
@@ -125,10 +131,10 @@ describe("messagerie des organisations et sécurité des comptes", () => {
   });
 
   it("le lien envoyé par l'administrateur système non plus", async () => {
-    const i = await activated();
+    await activated();
     await ctx.db.query("UPDATE users SET platform_role = 'super_admin' WHERE id = 'u_karim'");
     const send = vi.spyOn(ctx.mail, "send").mockResolvedValue({ ok: true } as never);
-    const r = await api("u_karim", "POST", `/api/admin/users/${i.user_id}/reset`, {});
+    const r = await api("u_karim", "POST", `/api/admin/users/${await idOf()}/reset`, {});
     expect(send).not.toHaveBeenCalled();
     expect(r.body.link).toBeTruthy();
   });

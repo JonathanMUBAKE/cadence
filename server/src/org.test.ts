@@ -119,7 +119,7 @@ describe("organisations multiples", () => {
   it("un invité n'accède qu'aux projets partagés explicitement", async () => {
     const studio = (await one<{ id: string }>("SELECT id FROM organizations WHERE name = 'Studio Lumen'")).id;
     await api("u_hugo", "POST", `/api/orgs/${studio}/switch`);
-    expect((await api("u_hugo", "PUT", "/api/org/members/u_theo", { role: "guest" })).status).toBe(200);
+    await ctx.svc.addOrgMember(studio, "u_theo", "guest");
     const idv = await projectByKey("IDV");
     expect((await api("u_theo", "GET", `/api/projects/${idv}`)).status).toBe(403);
     await api("u_hugo", "PUT", `/api/projects/${idv}/members/u_theo`, { role: "commenter" });

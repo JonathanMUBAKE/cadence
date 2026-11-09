@@ -18,13 +18,13 @@ describe("configuration au démarrage", () => {
     expect(startupProblems({ CADENCE_DEMO: "1" }, local)).toEqual([]);
     expect(startupProblems({ CADENCE_DEMO: "1", PUBLIC_URL: "https://c.test" }, { ...local, host: "0.0.0.0" })[0]).toMatch(/CADENCE_DEMO/);
     expect(startupProblems({}, { ...local, host: "0.0.0.0" })[0]).toMatch(/PUBLIC_URL/);
-    expect(startupProblems({ PUBLIC_URL: "https://c.test" }, { ...local, host: "0.0.0.0" })).toEqual([]);
+    expect(startupProblems({ PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, { ...local, host: "0.0.0.0" })).toEqual([]);
   });
   it("exige des secrets solides en production et avec une base distante", () => {
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test" }, local)).toHaveLength(2);
+    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x" }, local)).toHaveLength(2);
     expect(startupProblems({ COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: "court" }, { ...local, databaseUrl: true })).toEqual([expect.stringMatching(/CADENCE_SECRET_KEY/)]);
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", COOKIE_SECRET: LEGACY_SECRET, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([expect.stringMatching(/COOKIE_SECRET/)]);
-    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([]);
+    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x", COOKIE_SECRET: LEGACY_SECRET, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([expect.stringMatching(/COOKIE_SECRET/)]);
+    expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", SMTP_URL: "smtps://x", COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: STRONG }, local)).toEqual([]);
     expect(startupProblems({ NODE_ENV: "production", PUBLIC_URL: "https://c.test", CADENCE_DEMO: "1", COOKIE_SECRET: STRONG, CADENCE_SECRET_KEY: STRONG }, local)[0]).toMatch(/démo/);
   });
 });

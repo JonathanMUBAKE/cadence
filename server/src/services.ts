@@ -68,9 +68,9 @@ export const mentionPattern = (name: string, prefix = "@") => new RegExp(`${pref
 const KEY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
 
 /**
- * Rôle effectif de $1 sur chaque projet de ses organisations : le plus fort parmi
- * le rôle d'organisation, l'adhésion explicite, l'appartenance à l'équipe,
- * la supervision hiérarchique (responsable d'une entité ancêtre) et la visibilité publique.
+ * Rôle effectif de $1 sur chaque projet de ses organisations. Un administrateur d'organisation
+ * administre tout. Sinon, une adhésion explicite fixe le rôle et sert de plafond ; à défaut,
+ * le plus fort parmi l'appartenance à l'équipe, la supervision hiérarchique et la visibilité publique.
  */
 const ACCESS_SQL = `
   WITH RECURSIVE managed(id) AS (
@@ -80,11 +80,13 @@ const ACCESS_SQL = `
   SELECT p.id, p.org_id, p.archived, GREATEST(
     CASE WHEN om.role IN ('owner','admin') THEN 4 ELSE 0 END,
     COALESCE((SELECT CASE ms.role WHEN 'admin' THEN 4 WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END
-              FROM memberships ms WHERE ms.project_id = p.id AND ms.user_id = $1), 0),
-    CASE WHEN om.role <> 'guest' AND p.access = 'team' THEN COALESCE((SELECT CASE tm.role WHEN 'lead' THEN 4 ELSE 3 END
-              FROM team_members tm WHERE tm.team_id = p.team_id AND tm.user_id = $1), 0) ELSE 0 END,
-    CASE WHEN om.role <> 'guest' AND p.access = 'team' AND t.visibility <> 'private' AND t.unit_id IN (SELECT id FROM managed) THEN 1 ELSE 0 END,
-    CASE WHEN om.role <> 'guest' AND p.access = 'team' AND t.visibility = 'public' THEN 1 ELSE 0 END
+              FROM memberships ms WHERE ms.project_id = p.id AND ms.user_id = $1),
+      GREATEST(
+        CASE WHEN om.role <> 'guest' AND p.access = 'team' THEN COALESCE((SELECT CASE tm.role WHEN 'lead' THEN 4 ELSE 3 END
+                  FROM team_members tm WHERE tm.team_id = p.team_id AND tm.user_id = $1), 0) ELSE 0 END,
+        CASE WHEN om.role <> 'guest' AND p.access = 'team' AND t.visibility <> 'private' AND t.unit_id IN (SELECT id FROM managed) THEN 1 ELSE 0 END,
+        CASE WHEN om.role <> 'guest' AND p.access = 'team' AND t.visibility = 'public' THEN 1 ELSE 0 END
+      ))
   ) AS rank
   FROM projects p
   JOIN org_members om ON om.org_id = p.org_id AND om.user_id = $1
@@ -160,12 +162,12 @@ export class Services {
   }
 
   // ================================================================ photos de profil
-  /** Seul l'intéressé, ou un administrateur d'une organisation dont il est membre, peut changer sa photo. */
+  /** Un compte est global : seul son titulaire change sa photo. Un coéquipier IA dépend des administrateurs de son organisation. */
   private async canEditProfile(actorId: string, userId: string) {
     if (actorId === userId) return;
-    const shared = await this.db.one(`SELECT 1 FROM org_members a JOIN org_members b ON b.org_id = a.org_id AND b.user_id = $2
+    const agentOfMyOrg = (await this.user(userId)).is_ai && await this.db.one(`SELECT 1 FROM org_members a JOIN org_members b ON b.org_id = a.org_id AND b.user_id = $2
       WHERE a.user_id = $1 AND a.role IN ('owner','admin')`, [actorId, userId]);
-    if (!shared) throw forbidden("Seul l'intéressé ou un administrateur peut changer cette photo");
+    if (!agentOfMyOrg) throw forbidden("Seule la personne concernée peut changer sa photo");
   }
   async setAvatar(actorId: string, userId: string, dataUrl: string) {
     await this.user(userId);
@@ -272,6 +274,8 @@ export class Services {
     await this.requirePerm(actorId, orgId, "org.members");
     await this.user(userId);
     const current = await this.orgRole(userId, orgId);
+    // Entrer dans une organisation passe toujours par une invitation acceptée par la personne
+    if (!current) throw notFound("Cette personne n'est pas membre de l'organisation");
     if (role === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut nommer un propriétaire");
     if (current === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut modifier ou retirer un propriétaire");
     if (mine !== "owner" && ((role && ORG_RANK[role] > ORG_RANK[mine]) || (current && ORG_RANK[current] > ORG_RANK[mine]))) throw forbidden("Vous ne pouvez pas agir au-delà de votre propre niveau d'accès");
@@ -292,11 +296,14 @@ export class Services {
         await q.query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", [orgId, userId]);
       });
     } else {
-      await this.db.query(`INSERT INTO org_members (org_id, user_id, role, profile_id) VALUES ($1,$2,$3,$4)
-        ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, profile_id = EXCLUDED.profile_id`, [orgId, userId, role, systemProfileId(orgId, role)]);
+      await this.db.query("UPDATE org_members SET role = $1, profile_id = $2 WHERE org_id = $3 AND user_id = $4", [role, systemProfileId(orgId, role), orgId, userId]);
     }
     await this.log(actorId, "org.member", { orgId, data: { userId, role } });
     this.bus.emit({ type: "org.changed", actorId, orgId });
+  }
+  /** Réservé aux données de démonstration : aucune route n'y mène. */
+  async addOrgMember(orgId: string, userId: string, role: OrgRole) {
+    await this.db.query("INSERT INTO org_members (org_id, user_id, role, profile_id) VALUES ($1,$2,$3,$4)", [orgId, userId, role, systemProfileId(orgId, role)]);
   }
 
   // ================================================================ entités (hiérarchie)
@@ -453,6 +460,7 @@ export class Services {
   async joinTeam(actorId: string, teamId: string): Promise<"joined" | "requested"> {
     const t = await this.teamRow(teamId);
     const orgRole = await this.requireOrg(actorId, t.org_id, "member");
+    await this.requirePerm(actorId, t.org_id, "teams.join");
     if (await this.teamRole(actorId, teamId)) return "joined";
     if (t.visibility === "public" || orgRole === "owner" || orgRole === "admin") {
       await this.db.query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member')", [teamId, actorId]);

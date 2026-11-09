@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { AtSign, Check, Globe2, Lock, LogIn, Plus, UserPlus, Users, X } from "lucide-react";
 import { Avatar, AvatarStack, Button, Chip, Dialog, Empty, IconButton, ProgressRing, ProjectIcon, Spinner, cn } from "@/components/ui";
 import { AssigneePicker } from "@/components/pickers";
-import { useMe, useServiceAddress, useTeam, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
+import { useCan, useMe, useServiceAddress, useTeam, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { STATUS } from "@/lib/format";
 import { api } from "@/lib/api";
@@ -20,9 +20,10 @@ const COLORS = ["#6E56CF", "#0090FF", "#12A594", "#30A46C", "#F76B15", "#E5484D"
 
 function JoinButton({ t }: { t: Team }) {
   const qc = useQueryClient();
+  const can = useCan();
   if (t.my_role) return <Chip tone="success" icon={<Check className="size-3" />}>{t.my_role === "lead" ? "Responsable" : "Membre"}</Chip>;
   if (t.request_pending) return <Chip>Demande envoyée</Chip>;
-  if (t.visibility === "private") return null;
+  if (t.visibility === "private" || !can("teams.join")) return null;
   return (
     <Button size="sm" icon={<UserPlus className="size-3.5" />} onClick={(e) => {
       e.preventDefault();

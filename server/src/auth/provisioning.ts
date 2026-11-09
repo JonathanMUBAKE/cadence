@@ -1,6 +1,5 @@
 import nodemailer from "nodemailer";
-import { uid } from "../db.js";
-import type { MailService } from "../mail.js";
+import { uid, type Queryable } from "../db.js";
 import { HttpError, badRequest, forbidden, notFound, type Services } from "../services.js";
 import type { Access } from "./access.js";
 import { fingerprint, newToken, type Auth, type RequestInfo } from "./service.js";
@@ -10,16 +9,19 @@ const HOURLY_REQUEST_LIMIT = 5;
 type TokenKind = "invite" | "reset" | "setup";
 export type Registration = "invite" | "approval";
 const PATH: Record<TokenKind, string> = { invite: "/activation", setup: "/activation", reset: "/reinitialisation" };
+const LINK_EXPIRED = "Ce lien n'est plus valable : demandez-en un nouveau";
+const INVITATION_COLUMNS = "i.id, i.org_id, i.email, i.name, i.profile_id, i.created_account";
+interface OrgInvitation { id: string; org_id: string; email: string; name: string; profile_id: string; created_account: boolean }
 
 /** Vie des comptes : invitations, demandes d'accès, réinitialisation, et console de l'administrateur système. */
 export class Provisioning {
-  constructor(private svc: Services, private auth: Auth, private mail: MailService, private access: Access, private publicUrl: string | undefined) {}
+  constructor(private svc: Services, private auth: Auth, private access: Access, private publicUrl: string | undefined) {}
 
   // ---------------------------------------------------------------- liens à usage unique
-  private async createToken(kind: TokenKind, userId: string | null, createdBy: string | null, minutes: number) {
-    await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE kind = $1 AND user_id IS NOT DISTINCT FROM $2 AND used_at IS NULL", [kind, userId]);
+  private async createToken(kind: TokenKind, userId: string | null, createdBy: string | null, minutes: number, invitationId: string | null = null) {
+    await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE kind = $1 AND user_id IS NOT DISTINCT FROM $2 AND invitation_id IS NOT DISTINCT FROM $3 AND used_at IS NULL", [kind, userId, invitationId]);
     const token = newToken();
-    await this.svc.db.query(`INSERT INTO auth_tokens (id, token_hash, kind, user_id, created_by, expires_at) VALUES ($1,$2,$3,$4,$5, now() + ($6 || ' minutes')::interval)`, [uid("tok"), fingerprint(token), kind, userId, createdBy, String(minutes)]);
+    await this.svc.db.query(`INSERT INTO auth_tokens (id, token_hash, kind, user_id, created_by, expires_at, invitation_id) VALUES ($1,$2,$3,$4,$5, now() + ($6 || ' minutes')::interval, $7)`, [uid("tok"), fingerprint(token), kind, userId, createdBy, String(minutes), invitationId]);
     // Après le #, le jeton ne part jamais vers le serveur : ni journaux, ni proxy, ni en-tête Referer
     return `${this.publicUrl ?? ""}${PATH[kind]}#token=${token}`;
   }
@@ -28,17 +30,17 @@ export class Provisioning {
     return (await this.svc.db.one<{ status: string }>("SELECT status FROM users WHERE id = $1", [userId]))?.status;
   }
 
-  /** Seule la première organisation d'un compte en attente peut émettre son lien : les suivantes y gagneraient le compte entier. */
-  private async isOrigin(orgId: string, userId: string) {
-    return (await this.svc.db.one<{ org_id: string }>("SELECT org_id FROM org_members WHERE user_id = $1 ORDER BY joined_at, org_id LIMIT 1", [userId]))?.org_id === orgId;
-  }
-
   private validToken(token: string) {
-    return this.svc.db.one<{ id: string; kind: TokenKind; user_id: string | null }>("SELECT id, kind, user_id FROM auth_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()", [fingerprint(token)]);
+    return this.svc.db.one<{ id: string; kind: TokenKind; user_id: string | null; invitation_id: string | null }>("SELECT id, kind, user_id, invitation_id FROM auth_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()", [fingerprint(token)]);
   }
   /** Un lien ne peut être consommé qu'une fois, même par deux requêtes simultanées. */
-  private async consume(id: string) {
-    if (!(await this.svc.db.one("UPDATE auth_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL RETURNING id", [id]))) throw badRequest("Ce lien n'est plus valable");
+  private async consume(id: string, q: Queryable = this.svc.db) {
+    if (!(await q.query("UPDATE auth_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL RETURNING id", [id])).length) throw badRequest("Ce lien n'est plus valable");
+  }
+  /** Une invitation ne se consomme qu'une fois : le rattachement suit, dans la même transaction. */
+  private async join(q: Queryable, inv: OrgInvitation, userId: string) {
+    if (!(await q.query("UPDATE org_invitations SET status = 'accepted', decided_at = now() WHERE id = $1 AND status = 'pending' RETURNING id", [inv.id])).length) throw notFound("Invitation introuvable");
+    await q.query("INSERT INTO org_members (org_id, user_id, role, profile_id) SELECT $1, $2, p.base_role, p.id FROM access_profiles p WHERE p.id = $3 ON CONFLICT (org_id, user_id) DO NOTHING", [inv.org_id, userId, inv.profile_id]);
   }
 
   async peek(token: string) {
@@ -66,11 +68,16 @@ export class Provisioning {
       await this.auth.record("account.activated", { userId: id, ip: info.ip, data: { super_admin: true } });
       return;
     }
-    if ((await this.accountStatus(t.user_id!)) !== "invited") throw badRequest("Ce lien n'est plus valable : demandez-en un nouveau");
+    const invitation = t.invitation_id ? await this.svc.db.one<OrgInvitation>(`SELECT ${INVITATION_COLUMNS} FROM org_invitations i WHERE i.id = $1 AND i.status = 'pending'`, [t.invitation_id]) : undefined;
+    if (!invitation || (await this.accountStatus(t.user_id!)) !== "invited") throw badRequest(LINK_EXPIRED);
     await this.auth.setPassword(t.user_id!, password);
-    await this.consume(t.id);
-    await this.svc.db.query("UPDATE users SET status = 'active' WHERE id = $1", [t.user_id]);
-    await this.auth.record("account.activated", { userId: t.user_id, ip: info.ip });
+    await this.svc.db.tx(async (q) => {
+      await this.consume(t.id, q);
+      await q.query("UPDATE users SET status = 'active' WHERE id = $1", [t.user_id]);
+      await this.join(q, invitation, t.user_id!);
+    });
+    await this.auth.record("account.activated", { userId: t.user_id, ip: info.ip, data: { org_id: invitation.org_id } });
+    this.svc.bus.emit({ type: "org.changed", actorId: t.user_id!, orgId: invitation.org_id });
   }
 
   async reset(token: string, password: string, info: RequestInfo) {
@@ -83,9 +90,8 @@ export class Provisioning {
   }
 
   // ---------------------------------------------------------------- e-mails
-  /** Sans organisation, seul le SMTP de la plateforme sert : un lien de réinitialisation ne doit jamais transiter par un serveur qu'un administrateur d'organisation contrôle. */
-  private async deliver(orgId: string | null, to: string, subject: string, text: string): Promise<boolean> {
-    if (orgId && (await this.mail.send(orgId, { to, subject, text })).ok) return true;
+  /** Toujours le SMTP de la plateforme : un lien de compte ne doit jamais transiter par un serveur qu'un administrateur d'organisation contrôle. */
+  private async deliver(to: string, subject: string, text: string): Promise<boolean> {
     if (!process.env.SMTP_URL) return false;
     try {
       const transport = nodemailer.createTransport(process.env.SMTP_URL);
@@ -95,10 +101,30 @@ export class Provisioning {
     } catch { return false; }
   }
 
-  private async sendInvitation(userId: string, email: string, name: string, orgId: string | null, orgName: string, actorId: string | null) {
-    const link = await this.createToken("invite", userId, actorId, INVITE_HOURS * 60);
-    const sent = await this.deliver(orgId, email, `Votre accès à ${orgName}`, `Bonjour ${name},\n\nVous êtes invité(e) à rejoindre ${orgName} sur Cadence.\nChoisissez votre mot de passe en ouvrant ce lien, valable ${INVITE_HOURS} heures :\n\n${link}\n\nSi vous n'attendiez pas ce message, ignorez-le.\n\n— Cadence`);
-    return { sent, link: sent ? undefined : link };
+  /**
+   * Prévient le titulaire de l'adresse. La réponse ne dit jamais si un compte existe.
+   * Sans SMTP (usage local uniquement), le lien n'est montré que pour un compte créé par cette invitation.
+   */
+  private async notifyInvitee(inv: OrgInvitation, actorId: string | null) {
+    const org = (await this.svc.db.one<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [inv.org_id]))!;
+    const u = await this.svc.db.one<{ id: string; status: string; name: string }>("SELECT id, status, name FROM users WHERE lower(email) = $1 AND NOT is_ai", [inv.email]);
+    if (!u || u.status === "suspended") return { sent: true };
+    if (u.status === "active") {
+      await this.svc.notify(u.id, null, { kind: "org.invite", title: `${org.name} vous invite à rejoindre son espace` });
+      await this.deliver(inv.email, `Invitation à rejoindre ${org.name}`, `Bonjour ${u.name},\n\n${org.name} vous invite à rejoindre son espace sur Cadence.\nConnectez-vous pour accepter ou refuser : ${this.publicUrl ?? ""}/login\n\nSi vous n'attendiez pas ce message, ignorez-le.\n\n— Cadence`);
+      return { sent: true };
+    }
+    await this.svc.db.query("UPDATE users SET status = 'invited' WHERE id = $1", [u.id]);
+    const link = await this.createToken("invite", u.id, actorId, INVITE_HOURS * 60, inv.id);
+    const sent = await this.deliver(inv.email, `Votre accès à ${org.name}`, `Bonjour ${u.name},\n\nVous êtes invité(e) à rejoindre ${org.name} sur Cadence.\nChoisissez votre mot de passe en ouvrant ce lien, valable ${INVITE_HOURS} heures :\n\n${link}\n\nSi vous n'attendiez pas ce message, ignorez-le.\n\n— Cadence`);
+    return { sent, link: !sent && !process.env.SMTP_URL && inv.created_account ? link : undefined };
+  }
+
+  private async createInvitation(input: Omit<OrgInvitation, "id">, invitedBy: string) {
+    const inv: OrgInvitation = { id: uid("inv"), ...input };
+    await this.svc.db.query(`INSERT INTO org_invitations (id, org_id, email, name, profile_id, invited_by, created_account, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7, now() + ($8 || ' hours')::interval)`,
+      [inv.id, inv.org_id, inv.email, inv.name, inv.profile_id, invitedBy, inv.created_account, String(INVITE_HOURS)]);
+    return inv;
   }
 
   // ---------------------------------------------------------------- invitations par une organisation
@@ -106,58 +132,72 @@ export class Provisioning {
     await this.svc.requirePerm(actorId, orgId, "org.members");
     const email = input.email.trim().toLowerCase();
     await this.access.assertCanAssign(actorId, orgId, input.profile_id);
-    const org = (await this.svc.db.one<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [orgId]))!;
-    const profile = await this.access.profile(orgId, input.profile_id);
-    const existing = await this.svc.db.one<{ id: string; status: string; name: string }>("SELECT id, status, name FROM users WHERE lower(email) = $1 AND NOT is_ai", [email]);
-    if (existing?.status === "suspended") throw forbidden("Ce compte ne peut pas être invité. Contactez l'administrateur système.");
-    if (existing && (await this.svc.orgRole(existing.id, orgId))) throw badRequest("Cette personne est déjà membre de l'organisation");
-    let userId = existing?.id;
-    if (!userId) {
-      userId = uid("usr");
-      await this.svc.db.query("INSERT INTO users (id, name, email, status) VALUES ($1,$2,$3,'invited')", [userId, input.name.trim(), email]);
-    }
-    await this.svc.db.query("INSERT INTO org_members (org_id, user_id, role, profile_id) VALUES ($1,$2,$3,$4)", [orgId, userId, profile.base_role, profile.id]);
+    if (await this.svc.db.one("SELECT 1 FROM org_members om JOIN users u ON u.id = om.user_id WHERE om.org_id = $1 AND lower(u.email) = $2", [orgId, email])) throw badRequest("Cette personne est déjà membre de l'organisation");
+    if (await this.svc.db.one("SELECT 1 FROM org_invitations WHERE org_id = $1 AND email = $2 AND status = 'pending'", [orgId, email])) throw badRequest("Une invitation est déjà en attente pour cette adresse");
+    const existing = await this.svc.db.one<{ id: string }>("SELECT id FROM users WHERE lower(email) = $1 AND NOT is_ai", [email]);
+    const userId = existing?.id ?? uid("usr");
+    if (!existing) await this.svc.db.query("INSERT INTO users (id, name, email, status) VALUES ($1,$2,$3,'invited')", [userId, input.name.trim(), email]);
+    const inv = await this.createInvitation({ org_id: orgId, email, name: input.name.trim(), profile_id: input.profile_id, created_account: !existing }, actorId);
     await this.auth.record("account.invited", { userId, actorId, ip: info.ip, data: { org_id: orgId } });
     this.svc.bus.emit({ type: "org.changed", actorId, orgId });
-    if (existing?.status === "active") {
-      await this.svc.notify(userId, orgId, { kind: "org.invite", title: `Vous avez rejoint ${org.name}`, actor_id: actorId });
-      return { user_id: userId, sent: true, already_active: true };
-    }
-    if (existing) await this.svc.db.query("UPDATE users SET status = 'invited' WHERE id = $1", [userId]);
-    if (!(await this.isOrigin(orgId, userId))) return { user_id: userId, sent: false, awaiting_activation: true };
-    return { user_id: userId, ...(await this.sendInvitation(userId, email, input.name.trim(), orgId, org.name, actorId)) };
+    return { invitation_id: inv.id, ...(await this.notifyInvitee(inv, actorId)) };
   }
 
   async listInvitations(actorId: string, orgId: string) {
     await this.svc.requirePerm(actorId, orgId, "org.members");
-    return this.svc.db.query(`SELECT u.id, u.name, u.email, om.profile_id, p.name AS profile_name, u.created_at FROM users u JOIN org_members om ON om.user_id = u.id LEFT JOIN access_profiles p ON p.id = om.profile_id WHERE om.org_id = $1 AND u.status = 'invited' ORDER BY u.created_at DESC`, [orgId]);
+    return this.svc.db.query(`SELECT i.id, i.name, i.email, i.profile_id, p.name AS profile_name, i.created_at FROM org_invitations i LEFT JOIN access_profiles p ON p.id = i.profile_id WHERE i.org_id = $1 AND i.status = 'pending' ORDER BY i.created_at DESC`, [orgId]);
   }
 
-  async resendInvitation(actorId: string, orgId: string, userId: string) {
+  private async pendingOf(orgId: string, id: string) {
+    const inv = await this.svc.db.one<OrgInvitation>(`SELECT ${INVITATION_COLUMNS} FROM org_invitations i WHERE i.id = $1 AND i.org_id = $2 AND i.status = 'pending'`, [id, orgId]);
+    if (!inv) throw notFound("Invitation introuvable");
+    return inv;
+  }
+
+  async resendInvitation(actorId: string, orgId: string, id: string) {
     await this.svc.requirePerm(actorId, orgId, "org.members");
-    const u = await this.invited(orgId, userId);
-    if (!(await this.isOrigin(orgId, userId))) throw forbidden("Seule l'organisation qui a invité cette personne en premier peut renvoyer son lien");
-    const org = (await this.svc.db.one<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [orgId]))!;
-    return { user_id: userId, ...(await this.sendInvitation(userId, u.email, u.name, orgId, org.name, actorId)) };
+    const inv = await this.pendingOf(orgId, id);
+    await this.svc.db.query("UPDATE org_invitations SET expires_at = now() + ($1 || ' hours')::interval WHERE id = $2", [String(INVITE_HOURS), id]);
+    return { invitation_id: id, ...(await this.notifyInvitee(inv, actorId)) };
   }
 
-  private async invited(orgId: string, userId: string) {
-    const u = await this.svc.db.one<{ email: string; name: string }>("SELECT u.email, u.name FROM users u JOIN org_members om ON om.user_id = u.id WHERE u.id = $1 AND om.org_id = $2 AND u.status = 'invited'", [userId, orgId]);
-    if (!u) throw notFound("Invitation introuvable");
-    return u;
-  }
-
-  async cancelInvitation(actorId: string, orgId: string, userId: string, info: RequestInfo) {
+  async cancelInvitation(actorId: string, orgId: string, id: string, info: RequestInfo) {
     await this.svc.requirePerm(actorId, orgId, "org.members");
-    await this.invited(orgId, userId);
-    // Le lien appartient à l'organisation d'origine : les autres ne peuvent pas l'annuler
-    const origin = await this.isOrigin(orgId, userId);
-    await this.svc.db.query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", [orgId, userId]);
-    if (origin) await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE user_id = $1 AND kind = 'invite' AND used_at IS NULL", [userId]);
-    const others = await this.svc.db.one("SELECT 1 FROM org_members WHERE user_id = $1", [userId]);
-    if (!others) await this.svc.db.query("DELETE FROM users WHERE id = $1", [userId]);
-    await this.auth.record("invitation.cancelled", { userId, actorId, ip: info.ip, data: { org_id: orgId } });
+    const inv = await this.pendingOf(orgId, id);
+    await this.svc.db.query("UPDATE org_invitations SET status = 'cancelled', decided_at = now() WHERE id = $1", [id]);
+    await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE invitation_id = $1 AND used_at IS NULL", [id]);
+    // Un compte jamais activé, créé pour cette invitation, disparaît avec elle s'il n'attend plus rien
+    if (inv.created_account) await this.svc.db.query(`DELETE FROM users u WHERE lower(u.email) = $1 AND u.status = 'invited'
+      AND NOT EXISTS (SELECT 1 FROM org_members m WHERE m.user_id = u.id) AND NOT EXISTS (SELECT 1 FROM org_invitations i WHERE i.email = $1 AND i.status = 'pending')`, [inv.email]);
+    await this.auth.record("invitation.cancelled", { actorId, ip: info.ip, data: { org_id: orgId } });
     this.svc.bus.emit({ type: "org.changed", actorId, orgId });
+  }
+
+  // ---------------------------------------------------------------- invitations reçues
+  async myInvitations(userId: string) {
+    return this.svc.db.query(`SELECT i.id, o.name AS org_name, p.name AS profile_name, i.created_at FROM org_invitations i JOIN users u ON lower(u.email) = i.email JOIN organizations o ON o.id = i.org_id JOIN access_profiles p ON p.id = i.profile_id
+      WHERE u.id = $1 AND i.status = 'pending' AND i.expires_at > now() ORDER BY i.created_at DESC`, [userId]);
+  }
+
+  /** Seul le titulaire de l'adresse invitée voit son invitation : pour les autres, elle n'existe pas. */
+  private async mine(userId: string, id: string) {
+    const inv = await this.svc.db.one<OrgInvitation>(`SELECT ${INVITATION_COLUMNS} FROM org_invitations i JOIN users u ON lower(u.email) = i.email WHERE i.id = $1 AND u.id = $2 AND i.status = 'pending' AND i.expires_at > now()`, [id, userId]);
+    if (!inv) throw notFound("Invitation introuvable");
+    return inv;
+  }
+
+  async acceptInvitation(userId: string, id: string, info: RequestInfo) {
+    const inv = await this.mine(userId, id);
+    await this.svc.db.tx((q) => this.join(q, inv, userId));
+    await this.auth.record("invitation.accepted", { userId, ip: info.ip, data: { org_id: inv.org_id } });
+    this.svc.bus.emit({ type: "org.changed", actorId: userId, orgId: inv.org_id });
+  }
+
+  async declineInvitation(userId: string, id: string, info: RequestInfo) {
+    const inv = await this.mine(userId, id);
+    await this.svc.db.query("UPDATE org_invitations SET status = 'declined', decided_at = now() WHERE id = $1 AND status = 'pending'", [id]);
+    await this.svc.db.query("UPDATE auth_tokens SET used_at = now() WHERE invitation_id = $1 AND used_at IS NULL", [id]);
+    await this.auth.record("invitation.declined", { userId, ip: info.ip, data: { org_id: inv.org_id } });
   }
 
   // ---------------------------------------------------------------- réglages et demandes d'accès
@@ -190,7 +230,7 @@ export class Provisioning {
     const u = await this.svc.db.one<{ id: string; name: string; email: string }>("SELECT id, name, email FROM users WHERE lower(email) = lower($1) AND status = 'active' AND NOT is_ai", [emailRaw.trim()]);
     if (!u) return;
     const link = await this.createToken("reset", u.id, null, RESET_MINUTES);
-    const sent = await this.deliver(null, u.email, "Réinitialiser votre mot de passe", `Bonjour ${u.name},\n\nPour choisir un nouveau mot de passe, ouvrez ce lien, valable ${RESET_MINUTES} minutes :\n\n${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\n— Cadence`);
+    const sent = await this.deliver(u.email, "Réinitialiser votre mot de passe", `Bonjour ${u.name},\n\nPour choisir un nouveau mot de passe, ouvrez ce lien, valable ${RESET_MINUTES} minutes :\n\n${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\n— Cadence`);
     if (!sent && process.env.NODE_ENV !== "production") console.info(`[auth] aucun SMTP configuré : lien de réinitialisation pour ${u.email} : ${link}`);
   }
 
@@ -254,12 +294,9 @@ export class Provisioning {
     const u = await this.adminTarget(actorId, userId);
     if (u.status !== "pending") throw badRequest("Cette demande a déjà été traitée");
     const profile = await this.access.profile(orgId, profileId);
-    await this.svc.db.query("INSERT INTO org_members (org_id, user_id, role, profile_id) VALUES ($1,$2,$3,$4)", [orgId, userId, profile.base_role, profile.id]);
-    await this.svc.db.query("UPDATE users SET status = 'invited' WHERE id = $1", [userId]);
+    const inv = await this.createInvitation({ org_id: orgId, email: u.email.toLowerCase(), name: u.name, profile_id: profile.id, created_account: true }, actorId);
     await this.auth.record("access.approved", { userId, actorId, ip: info.ip, data: { org_id: orgId } });
-    const org = (await this.svc.db.one<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [orgId]))!;
-    this.svc.bus.emit({ type: "org.changed", actorId, orgId });
-    return { user_id: userId, ...(await this.sendInvitation(userId, u.email, u.name, orgId, org.name, actorId)) };
+    return { invitation_id: inv.id, ...(await this.notifyInvitee(inv, actorId)) };
   }
 
   async reject(actorId: string, userId: string, info: RequestInfo) {
@@ -309,7 +346,7 @@ export class Provisioning {
     if (u.status !== "active") throw badRequest("Ce compte n'est pas actif");
     if (clearMfa) await this.auth.clearMfa(userId);
     const { link } = await this.resetLink(userId);
-    const sent = await this.deliver(null, u.email, "Réinitialiser votre mot de passe", `Bonjour ${u.name},\n\nUn administrateur vous envoie ce lien pour choisir un nouveau mot de passe, valable ${RESET_MINUTES} minutes :\n\n${link}\n\n— Cadence`);
+    const sent = await this.deliver(u.email, "Réinitialiser votre mot de passe", `Bonjour ${u.name},\n\nUn administrateur vous envoie ce lien pour choisir un nouveau mot de passe, valable ${RESET_MINUTES} minutes :\n\n${link}\n\n— Cadence`);
     await this.auth.record("password.reset_requested", { userId, actorId, ip: info.ip, data: { clear_mfa: clearMfa } });
     return { sent, link: sent ? undefined : link };
   }

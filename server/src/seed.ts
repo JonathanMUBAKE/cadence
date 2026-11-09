@@ -31,7 +31,7 @@ export async function seed(svc: Services) {
   const org = await svc.createOrg("u_alice", { name: "Nova Mobile", domains: ["cadence.app"] });
   const root = (await db.one<{ id: string }>("SELECT id FROM org_units WHERE org_id = $1 AND parent_id IS NULL", [org.id]))!.id;
   for (const [u, role] of [["u_karim", "member"], ["u_chloe", "member"], ["u_hugo", "member"], ["u_ines", "member"], ["u_theo", "member"], ["ai_atlas", "member"], ["ai_nova", "member"], ["ai_cadence", "member"]] as const) {
-    await svc.setOrgMember("u_alice", org.id, u, role);
+    await svc.addOrgMember(org.id, u, role);
   }
   const unit = (name: string, kind: string, parent: string, manager: string | null) => svc.createUnit("u_alice", org.id, { name, kind, parent_id: parent, manager_id: manager });
   const dirProduit = await unit("Direction Produit & Technologie", "Direction", root, "u_alice");
@@ -171,7 +171,7 @@ export async function seed(svc: Services) {
 
   // ------------------------------------------------------------------ second espace : Studio Lumen
   const studio = await svc.createOrg("u_hugo", { name: "Studio Lumen" });
-  await svc.setOrgMember("u_hugo", studio.id, "u_alice", "member");
+  await svc.addOrgMember(studio.id, "u_alice", "member");
   const sRoot = (await db.one<{ id: string }>("SELECT id FROM org_units WHERE org_id = $1 AND parent_id IS NULL", [studio.id]))!.id;
   const sTeam = await svc.createTeam("u_hugo", studio.id, { name: "Création", unit_id: sRoot, visibility: "public", color: "#0090FF" });
   await svc.setTeamMember("u_hugo", sTeam.id, "u_alice", "member");

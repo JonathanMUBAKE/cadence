@@ -63,8 +63,12 @@ export function privateAuthRoutes(r: FastifyInstance, d: AuthDeps) {
   // ---------------------------------------------------------------- invitations
   r.get("/api/org/invitations", async (req) => provisioning.listInvitations(me(req), org(req)));
   r.post("/api/org/invitations", async (req) => provisioning.invite(me(req), org(req), z.object({ email: email.regex(/^[^@\s]+@[^@\s]+$/), name: z.string().trim().min(1).max(120), profile_id: z.string() }).parse(req.body), info(req)));
-  r.post<UserId>("/api/org/invitations/:userId/resend", async (req) => provisioning.resendInvitation(me(req), org(req), req.params.userId));
-  r.delete<UserId>("/api/org/invitations/:userId", async (req) => { await provisioning.cancelInvitation(me(req), org(req), req.params.userId, info(req)); return { ok: true }; });
+  r.post<Id>("/api/org/invitations/:id/resend", async (req) => provisioning.resendInvitation(me(req), org(req), req.params.id));
+  r.delete<Id>("/api/org/invitations/:id", async (req) => { await provisioning.cancelInvitation(me(req), org(req), req.params.id, info(req)); return { ok: true }; });
+  // Invitations reçues : c'est la personne qui décide
+  r.get("/api/invitations", async (req) => provisioning.myInvitations(me(req)));
+  r.post<Id>("/api/invitations/:id/accept", async (req) => { await provisioning.acceptInvitation(me(req), req.params.id, info(req)); return { ok: true }; });
+  r.post<Id>("/api/invitations/:id/decline", async (req) => { await provisioning.declineInvitation(me(req), req.params.id, info(req)); return { ok: true }; });
 
   // ---------------------------------------------------------------- profils et droits
   const Base = z.enum(["owner", "admin", "member", "guest"]);
