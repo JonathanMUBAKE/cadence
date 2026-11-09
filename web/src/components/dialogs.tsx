@@ -42,7 +42,7 @@ export function NewProjectDialog() {
   const [key, setKey] = useState("");
   const [keyTouched, setKeyTouched] = useState(false);
   const [access, setAccess] = useState<"team" | "private">("team");
-  useEffect(() => { if (shell.newProject) { setTeamId(shell.newProjectTeam ?? myTeams[0]?.id ?? ""); setKey(""); setKeyTouched(false); setAccess("team"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shell.newProject]);
+  useEffect(() => { if (shell.newProject) { setTeamId(shell.newProjectTeam ?? myTeams[0]?.id ?? ""); setKey(""); setKeyTouched(false); setAccess("team"); } }, [shell.newProject]);
   const autoKey = name.normalize("NFD").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().replace(/^[0-9]+/, "").padEnd(3, "X").slice(0, 4);
   const effectiveKey = keyTouched ? key : name.trim() ? autoKey : "";
   const submit = async () => {
@@ -127,7 +127,7 @@ export function QuickAddDialog() {
   const [text, setText] = useState("");
   const [items, setItems] = useState<ParsedTask[] | null>(null);
   const [loading, setLoading] = useState(false);
-  useEffect(() => { if (shell.quickAdd.open) { setProjectId(shell.quickAdd.projectId ?? editable[0]?.id ?? null); setItems(null); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shell.quickAdd.open]);
+  useEffect(() => { if (shell.quickAdd.open) { setProjectId(shell.quickAdd.projectId ?? editable[0]?.id ?? null); setItems(null); } }, [shell.quickAdd.open]);
   const analyse = async () => {
     setLoading(true);
     try { setItems((await api.post<{ tasks: ParsedTask[] }>(`/api/projects/${projectId}/ai/parse`, { text })).tasks); }

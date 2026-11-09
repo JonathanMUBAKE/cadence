@@ -153,7 +153,6 @@ function Burnup({ data }: { data: { day: string; done: number; total: number }[]
       <text x={x(data.length - 1) - 8} y={y(last.done) - 10} textAnchor="end" fontSize="12" fontWeight="600" fill="var(--fg)">{last.done} terminées</text>
       <text x={x(data.length - 1) - 8} y={y(last.total) - 8} textAnchor="end" fontSize="11" fill="var(--muted)">périmètre {last.total}</text>
     </svg>
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [data]);
 }
 

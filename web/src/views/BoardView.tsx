@@ -28,7 +28,6 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
   const [cols, setCols] = useState<Columns>(derive);
   const [dragging, setDragging] = useState<string | null>(null);
   const lastOver = useRef<Collision[]>([]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!dragging) setCols(derive()); }, [tasks, project.sections]);
 
   const sensors = useSensors(

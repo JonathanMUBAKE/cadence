@@ -6,7 +6,7 @@ import { buildApp } from "./app.js";
  * Contrat d'accès de toute l'API, rejoué à chaque test : anonyme, lecteur strict, propriétaire externe, propriétaire légitime.
  * Une route ajoutée sans entrée dans TABLE fait échouer la suite : aucune route ne peut échapper à ce contrôle.
  */
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+type Any = any;
 type Kind = "P1" | "P2" | "P3" | "P4";
 const PNG = "data:image/png;base64,iVBORw0KGgo=", GOOD = "cheval-agrafe-batterie-42", NO_LIMITS = { anonymousPerMinute: 1e6, sessionPerMinute: 1e6, aiPerMinute: 1e6, invitationsPerHour: 1e6, aiRunsPerHour: 1e6 };
 const PUBLIC = /^\/api\/auth\/(login|logout|config|users$|mfa$|token|activate|reset|forgot|request-access)/;

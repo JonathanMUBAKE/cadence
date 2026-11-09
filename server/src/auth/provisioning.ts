@@ -120,9 +120,9 @@ export class Provisioning {
     return { sent, link: !sent && !process.env.SMTP_URL && inv.created_account ? link : undefined };
   }
 
-  private async createInvitation(input: Omit<OrgInvitation, "id">, invitedBy: string) {
+  private async createInvitation(input: Omit<OrgInvitation, "id">, invitedBy: string, q: Queryable = this.svc.db) {
     const inv: OrgInvitation = { id: uid("inv"), ...input };
-    await this.svc.db.query(`INSERT INTO org_invitations (id, org_id, email, name, profile_id, invited_by, created_account, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7, now() + ($8 || ' hours')::interval)`,
+    await q.query(`INSERT INTO org_invitations (id, org_id, email, name, profile_id, invited_by, created_account, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7, now() + ($8 || ' hours')::interval)`,
       [inv.id, inv.org_id, inv.email, inv.name, inv.profile_id, invitedBy, inv.created_account, String(INVITE_HOURS)]);
     return inv;
   }
@@ -136,8 +136,10 @@ export class Provisioning {
     if (await this.svc.db.one("SELECT 1 FROM org_invitations WHERE org_id = $1 AND email = $2 AND status = 'pending'", [orgId, email])) throw badRequest("Une invitation est déjà en attente pour cette adresse");
     const existing = await this.svc.db.one<{ id: string }>("SELECT id FROM users WHERE lower(email) = $1 AND NOT is_ai", [email]);
     const userId = existing?.id ?? uid("usr");
-    if (!existing) await this.svc.db.query("INSERT INTO users (id, name, email, status) VALUES ($1,$2,$3,'invited')", [userId, input.name.trim(), email]);
-    const inv = await this.createInvitation({ org_id: orgId, email, name: input.name.trim(), profile_id: input.profile_id, created_account: !existing }, actorId);
+    const inv = await this.svc.db.tx(async (q) => {
+      if (!existing) await q.query("INSERT INTO users (id, name, email, status) VALUES ($1,$2,$3,'invited')", [userId, input.name.trim(), email]);
+      return this.createInvitation({ org_id: orgId, email, name: input.name.trim(), profile_id: input.profile_id, created_account: !existing }, actorId, q);
+    });
     await this.auth.record("account.invited", { userId, actorId, ip: info.ip, data: { org_id: orgId } });
     this.svc.bus.emit({ type: "org.changed", actorId, orgId });
     return { invitation_id: inv.id, ...(await this.notifyInvitee(inv, actorId)) };

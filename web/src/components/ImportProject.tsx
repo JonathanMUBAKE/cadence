@@ -37,7 +37,7 @@ export function ImportProjectDialog({ open, onOpenChange }: { open: boolean; onO
   const [draft, setDraft] = useState<Omit<ImportProposal, "tasks"> | null>(null);
   const [rows, setRows] = useState<TaskRow[]>([]);
 
-  useEffect(() => { if (open) { setAnalysis(null); setDraft(null); setRows([]); setTeamId(myTeams[0]?.id ?? ""); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  useEffect(() => { if (open) { setAnalysis(null); setDraft(null); setRows([]); setTeamId(myTeams[0]?.id ?? ""); } }, [open]);
 
   const read = async (file?: File) => {
     if (!file) return;

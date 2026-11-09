@@ -41,6 +41,7 @@ export class AiEngine {
   private waiters = new Map<string, (ok: boolean) => void>();
   private controllers = new Map<string, AbortController>();
   private timer: NodeJS.Timeout | null = null;
+  private closing = false;
   /** Exécutions en cours de traitement (pour attendre la fin proprement, notamment en test). */
   readonly pending = new Set<Promise<unknown>>();
 
@@ -63,6 +64,7 @@ export class AiEngine {
 
   /** Arrêt propre : interrompt les exécutions (y compris celles qui attendent une validation) puis attend leur fin. */
   async shutdown(maxMs = 3000) {
+    this.closing = true;
     if (this.timer) clearInterval(this.timer);
     for (const c of this.controllers.values()) c.abort();
     await Promise.race([Promise.allSettled([...this.pending]), new Promise((r) => setTimeout(r, maxMs))]);
@@ -158,7 +160,7 @@ export class AiEngine {
     await this.svc.db.query(`INSERT INTO ai_runs (id, org_id, agent_id, kind, task_id, project_id, requested_by, rule_id, status, provider)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9)`, [id, orgId, o.agentId, o.kind, o.taskId ?? null, o.projectId ?? null, o.requestedBy ?? null, o.ruleId ?? null, this.provider.name]);
     await this.emitRun(id);
-    setImmediate(() => { this.track(this.execute(id, o, orgId!).catch((err) => console.error("[ai] exécution", err))); });
+    setImmediate(() => { if (!this.closing) this.track(this.execute(id, o, orgId!).catch((err) => console.error("[ai] exécution", err))); });
     return id;
   }
 
@@ -173,7 +175,7 @@ export class AiEngine {
     await this.svc.db.query(`INSERT INTO ai_runs (id, org_id, agent_id, kind, project_id, requested_by, status, provider) VALUES ($1,$2,'ai_cadence','assistant',$3,$4,'queued',$5)`,
       [id, orgId, projectId, userId, this.provider.name]);
     await this.emitRun(id);
-    setImmediate(() => { this.track(this.executeAssistant(id, userId, orgId, history.slice(-20), projectId).catch((err) => console.error("[ai] assistant", err))); });
+    setImmediate(() => { if (!this.closing) this.track(this.executeAssistant(id, userId, orgId, history.slice(-20), projectId).catch((err) => console.error("[ai] assistant", err))); });
     return id;
   }
 
@@ -185,7 +187,7 @@ export class AiEngine {
     const ctx: ToolCtx = { actorId: agent.id, orgId, ...(o.projectId ? { scope: { requesterId: o.requestedBy ?? null, projectId: o.projectId } } : {}) };
     try {
       if (!o.taskId || !o.projectId) throw new Error("Aucune tâche associée");
-      let task;
+      let task: unknown;
       try { task = await this.tools.execute(ctx, "get_task", { task: o.taskId }); }
       catch (e) { throw new Error(`${agent.name} n'a pas accès à cette tâche : ${(e as Error).message}`); }
       const project = await this.tools.execute(ctx, "get_project", { project_id: o.projectId });
@@ -278,7 +280,9 @@ export class AiEngine {
           await this.updateStep(stepId, "ok", out);
           results.push({ type: "tool_result", tool_use_id: b.id, content: trim(out, TOOL_RESULT_MAX) });
         } catch (err) {
-          const msg = (err as Error).message;
+          // Seuls les refus métier sont parlants ; une panne technique reste dans les journaux du serveur
+          if (!(err instanceof HttpError)) console.error("[ai] outil", b.name, err);
+          const msg = err instanceof HttpError ? err.message : "Erreur interne de l'outil";
           await this.updateStep(stepId, "error", msg);
           results.push({ type: "tool_result", tool_use_id: b.id, content: `Erreur : ${msg}`, is_error: true });
         }

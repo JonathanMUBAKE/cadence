@@ -46,7 +46,7 @@ export function Assistant() {
   }, [run, runId, stream]);
   useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" }); }, [messages, stream, run?.steps.length, run?.approvals.length]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 150); }, [open]);
-  useEffect(() => { if (open && shell.assistant.prompt) send(shell.assistant.prompt); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, shell.assistant.prompt]);
+  useEffect(() => { if (open && shell.assistant.prompt) send(shell.assistant.prompt); }, [open, shell.assistant.prompt]);
 
   async function send(text: string) {
     const q = text.trim();

@@ -429,11 +429,10 @@ export class Services {
     return { ...visible, members, projects, requests };
   }
   async createTeam(actorId: string, orgId: string, input: { name: string; description?: string; visibility?: TeamVisibility; unit_id?: string | null; color?: string }) {
-    const role = await this.requireOrg(actorId, orgId, "member");
+    await this.requireOrg(actorId, orgId, "member");
     await this.requirePerm(actorId, orgId, "teams.create");
     if (!input.name?.trim()) throw badRequest("Le nom de l'équipe est obligatoire");
     if (input.unit_id && (await this.unitRow(input.unit_id)).org_id !== orgId) throw badRequest("Entité invalide");
-    void role;
     const id = uid("tem");
     await this.db.tx(async (q) => {
       await q.query("INSERT INTO teams (id, org_id, unit_id, name, description, visibility, color) VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -535,14 +534,24 @@ export class Services {
         (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL AND NOT t.completed AND t.due_on < $3::date) AS overdue_count
       FROM (${ACCESS_SQL}) a JOIN projects p ON p.id = a.id LEFT JOIN teams tm ON tm.id = p.team_id
       WHERE a.rank > 0 AND p.org_id = $2 AND p.archived = $4 ORDER BY tm.name NULLS LAST, p.created_at`, [actorId, orgId, today(), !!opts.archived]);
-    const out = [];
-    for (const r of rows) {
-      out.push({
-        ...(r as unknown as Project), role: RANK_ROLE[Number(r.rank)], team_name: (r.team_name as string) ?? null,
-        task_count: Number(r.task_count), done_count: Number(r.done_count), overdue_count: Number(r.overdue_count),
-        members: (await this.members(String(r.id))).map((m) => m.user_id),
-      });
-    }
+    const members = await this.memberIdsByProject(rows.map((r) => String(r.id)));
+    return rows.map((r) => ({
+      ...(r as unknown as Project), role: RANK_ROLE[Number(r.rank)], team_name: (r.team_name as string) ?? null,
+      task_count: Number(r.task_count), done_count: Number(r.done_count), overdue_count: Number(r.overdue_count),
+      members: members.get(String(r.id)) ?? [],
+    }));
+  }
+  /** Mêmes personnes que `members`, pour plusieurs projets en une seule requête. */
+  private async memberIdsByProject(projectIds: string[]) {
+    const rows = await this.db.query<{ project_id: string; user_id: string }>(`
+      SELECT project_id, user_id, role FROM memberships WHERE project_id = ANY($1)
+      UNION ALL
+      SELECT p.id, tm.user_id, CASE tm.role WHEN 'lead' THEN 'admin' ELSE 'editor' END FROM team_members tm
+        JOIN projects p ON p.team_id = tm.team_id AND p.access = 'team'
+        WHERE p.id = ANY($1) AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.project_id = p.id AND m.user_id = tm.user_id)
+      ORDER BY 3 DESC`, [projectIds]);
+    const out = new Map<string, string[]>();
+    for (const r of rows) out.set(r.project_id, [...(out.get(r.project_id) ?? []), r.user_id]);
     return out;
   }
   /** Membres affichés d'un projet : adhésions explicites, puis membres de l'équipe (si accès « équipe »). */
@@ -638,10 +647,11 @@ export class Services {
     await this.projectPerm(actorId, projectId, "projects.delete");
     const p = await this.projectRow(projectId);
     if (confirm.trim() !== p.name) throw badRequest("Saisissez le nom exact du projet pour confirmer la suppression");
-    const members = (await this.readableUsers(projectId)).map((u) => u);
+    const members = await this.readableUsers(projectId);
     await this.db.tx(async (q) => {
       await q.query("DELETE FROM notifications WHERE project_id = $1", [projectId]);
-      await q.query("DELETE FROM activity WHERE project_id = $1", [projectId]);
+      // L'historique survit au projet : détaché de lui, il reste rattaché à l'organisation
+      await q.query("UPDATE activity SET project_id = NULL, task_id = NULL WHERE project_id = $1", [projectId]);
       await q.query("DELETE FROM projects WHERE id = $1", [projectId]);
     });
     await this.log(actorId, "project.deleted", { orgId: p.org_id, data: { name: p.name } });
