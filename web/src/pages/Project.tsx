@@ -7,7 +7,7 @@ import { Avatar, AvatarStack, Button, Dialog, IconButton, Menu, MenuContent, Men
 import { DueChip, DuePicker } from "@/components/pickers";
 import { StatusUpdateDialog } from "@/components/dialogs";
 import { isActive } from "@/components/ai";
-import { useProject, useProjectTasks, useRuns, useUserMap, useUsers } from "@/lib/hooks";
+import { useCan, useProject, useProjectTasks, useRuns, useUserMap, useUsers } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { STATUS } from "@/lib/format";
 import { api } from "@/lib/api";
@@ -117,11 +117,12 @@ export function ProjectPage() {
 }
 
 function ProjectMenu({ project }: { project: ProjectDetail }) {
+  const can = useCan();
   const qc = useQueryClient();
   const nav = useNavigate();
   const [deleting, setDeleting] = useState(false);
   const [confirm, setConfirm] = useState("");
-  if (project.role !== "admin") return null;
+  if (project.role !== "admin" || (!can("projects.archive") && !can("projects.delete"))) return null;
   const refresh = () => { qc.invalidateQueries({ queryKey: ["projects"] }); qc.invalidateQueries({ queryKey: ["project", project.id] }); };
   const archive = () => api.patch(`/api/projects/${project.id}`, { archived: !project.archived })
     .then(() => { refresh(); toast.success(project.archived ? "Projet restauré" : "Projet archivé"); if (!project.archived) nav("/"); }, (e) => toast.error(e.message));
@@ -132,8 +133,8 @@ function ProjectMenu({ project }: { project: ProjectDetail }) {
       <Menu>
         <MenuTrigger asChild><IconButton label="Actions du projet"><Ellipsis className="size-4" /></IconButton></MenuTrigger>
         <MenuContent align="end">
-          <MenuItem icon={<Archive className="size-3.5" />} onSelect={archive}>{project.archived ? "Restaurer le projet" : "Archiver le projet"}</MenuItem>
-          <MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => { setConfirm(""); setDeleting(true); }}>Supprimer le projet</MenuItem>
+          {can("projects.archive") && <MenuItem icon={<Archive className="size-3.5" />} onSelect={archive}>{project.archived ? "Restaurer le projet" : "Archiver le projet"}</MenuItem>}
+          {can("projects.delete") && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => { setConfirm(""); setDeleting(true); }}>Supprimer le projet</MenuItem></>}
         </MenuContent>
       </Menu>
       <Dialog open={deleting} onOpenChange={setDeleting} title="Supprimer définitivement le projet ?" width={480}

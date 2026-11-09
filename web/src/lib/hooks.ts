@@ -12,6 +12,11 @@ export const queryClient = new QueryClient({
 
 // ---------------------------------------------------------------- lectures
 export const useMe = () => useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/me"), retry: false });
+/** Teste un droit coché dans le profil. Le serveur reste seul juge : ceci sert seulement à ne pas proposer l'impossible. */
+export function useCan() {
+  const { data } = useMe();
+  return useMemo(() => { const set = new Set(data?.permissions ?? []); return (perm: string) => set.has(perm); }, [data]);
+}
 export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: () => api.get<OrgUser[]>("/api/users"), staleTime: 60_000 });
 export const useUnits = () => useQuery({ queryKey: ["units"], queryFn: () => api.get<OrgUnit[]>("/api/org/units") });
 export const useTeams = () => useQuery({ queryKey: ["teams"], queryFn: () => api.get<Team[]>("/api/teams") });

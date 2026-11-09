@@ -36,6 +36,8 @@ async function startServer() {
   process.env.COOKIE_SECRET ||= secret;
   process.env.CADENCE_SECRET_KEY ||= secret;
   process.env.NODE_ENV ||= "production";
+  // Application locale et mono-poste : on garde le choix d'un profil, sans mot de passe
+  process.env.CADENCE_DEMO ||= "1";
   mkdirSync(dataDir(), { recursive: true });
   const root = serverRoot();
   const { buildApp } = await import(pathToFileURL(path.join(root, "server", "dist", "app.js")).href);

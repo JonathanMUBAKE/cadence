@@ -10,7 +10,7 @@ import { Avatar, Button, Checkbox, Chip, ConfirmDialog, IconButton, Markdown, Me
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker, SectionPicker } from "./pickers";
 import { AiBadge, RUN_STATUS, RunTimeline, isActive } from "./ai";
 import { ATTACHMENT_MAX_BYTES, AttachmentRow, Attachments, formatSize } from "./Attachments";
-import { useAgents, useCreateTask, useDeleteTask, useMe, useProject, useProjects, useRuns, useTask, useUpdateTask, useUserMap } from "@/lib/hooks";
+import { useAgents, useCan, useCreateTask, useDeleteTask, useMe, useProject, useProjects, useRuns, useTask, useUpdateTask, useUserMap } from "@/lib/hooks";
 import { ago, dueLabel, shortDate } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { Task, TaskDetail } from "@/lib/types";
@@ -54,9 +54,12 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
   const { data: projects } = useProjects();
   const qc = useQueryClient();
   const { data: me } = useMe();
+  const can = useCan();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const canEdit = t?.role === "editor" || t?.role === "admin";
-  const canRemove = t?.role === "admin" || (canEdit && t?.creator_id === me?.id);
+  const roleAllowsRemoval = t?.role === "admin" || (canEdit && t?.creator_id === me?.id);
+  const canDelete = roleAllowsRemoval && can("tasks.delete");
+  const canMove = roleAllowsRemoval && can("tasks.move");
   const save = (patch: Partial<Task>) => t && update.mutate({ id: t.id, ...patch });
 
   if (isLoading) return <div className="flex flex-1 items-center justify-center"><Spinner /></div>;
@@ -81,7 +84,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
                   try { const c = await api.post<Task>(`/api/tasks/${t.id}/duplicate`, { subtasks: true }); qc.invalidateQueries({ queryKey: ["tasks"] }); toast.success("Tâche dupliquée"); onOpenTask(c.id); }
                   catch (e) { toast.error((e as Error).message); }
                 }}>Dupliquer avec les sous-tâches</MenuItem>
-                {!t.parent_id && canRemove && (
+                {!t.parent_id && canMove && (
                   <MenuSub label="Déplacer vers un projet" icon={<FolderInput className="size-3.5" />}>
                     {(projects ?? []).filter((p) => p.id !== t.project_id && (p.role === "editor" || p.role === "admin")).map((p) => (
                       <MenuItem key={p.id} icon={<ProjectIcon icon={p.icon} color={p.color} size={16} />} onSelect={async () => {
@@ -94,7 +97,7 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
                     ))}
                   </MenuSub>
                 )}
-                {canRemove && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => setConfirmingDelete(true)}>Supprimer la tâche</MenuItem></>}
+                {canDelete && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => setConfirmingDelete(true)}>Supprimer la tâche</MenuItem></>}
               </MenuContent>
             </Menu>
           )}

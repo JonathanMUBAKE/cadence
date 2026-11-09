@@ -90,14 +90,18 @@ Le modèle par défaut est `claude-opus-5-5`. On peut le changer avec la variabl
 | `ANTHROPIC_API_KEY` | Active Claude | mode démo |
 | `CADENCE_MODEL` | Modèle Claude | `claude-opus-5-5` |
 | `HOST` | Adresse d'écoute. Toute autre valeur que l'ordinateur local exige `CADENCE_DEMO=1` | `127.0.0.1` |
-| `CADENCE_DEMO` | `1` : accepte d'exposer la connexion de démonstration, sans mot de passe, au réseau ou en production | désactivé |
+| `PUBLIC_URL` | Adresse publique, utilisée dans les liens envoyés par e-mail. **Obligatoire** en production ou sur le réseau | `http://localhost:PORT` |
+| `CADENCE_DEMO` | `1` : données d'exemple et connexion sans mot de passe. Usage local uniquement, refusé en production | désactivé |
+| `TRUST_PROXY` | Derrière un proxy de confiance : nombre de proxys devant Cadence (`1` le plus souvent) ou leurs adresses (`10.0.0.0/8`) | désactivé |
+| `SMTP_URL`, `SMTP_FROM` | Messagerie de la plateforme, **seule à envoyer les liens de réinitialisation**. Sans elle, l'administrateur système génère le lien. Sert aussi de secours aux organisations sans SMTP | aucune |
+| `CADENCE_BOOTSTRAP` | `1` : réaffiche au démarrage le lien de création d'un administrateur système | désactivé |
 | `COOKIE_SECRET` | Signature des sessions, 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` | généré dans `server/.cadence-secret` |
 | `CADENCE_SECRET_KEY` | Clé de chiffrement des secrets en base (mot de passe SMTP), 32 caractères minimum. **Obligatoire** en production ou avec `DATABASE_URL` : la changer rend les mots de passe enregistrés illisibles. | `COOKIE_SECRET`, sinon le secret local |
 
 ## Tests
 
 ```bash
-npm test          # 111 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
+npm test          # 152 tests : API, droits en cascade, hiérarchie, organisations, IA, validations, RLS, messagerie SMTP réelle, photos (Vitest)
 npm run e2e       # parcours complet dans un vrai navigateur (Playwright)
 ```
 
@@ -108,6 +112,8 @@ server/src
   db.ts             accès PostgreSQL (pg pour Supabase, PGlite embarqué) et migrations
   ../migrations/    schéma SQL versionné (001 initial, 002 sécurité RLS, 003 photos et messagerie)
   services.ts       logique métier : organisations, entités, équipes, projets, tâches, droits effectifs
+  auth/             mots de passe, sessions, double authentification, invitations, console système, profils
+  permissions.ts    catalogue des droits cochables
   bus.ts            événements métier → temps réel, déclencheurs IA et e-mails
   mail.ts           SMTP par organisation, adresses de service par niveau, envoi des notifications
   crypto.ts         chiffrement des secrets stockés en base
@@ -127,4 +133,14 @@ web/src
 2. **L'IA est un utilisateur comme un autre.** Elle a des adhésions et des rôles, et chaque outil vérifie ses droits.
 3. **Humain dans la boucle.** Les écritures passent par une validation, sauf si une règle l'autorise explicitement. Tout est journalisé.
 
-> Espace de démonstration : la connexion se fait en choisissant un profil, sans mot de passe. Cadence n'écoute donc que sur l'ordinateur local et refuse de démarrer sur le réseau ou en production sans `CADENCE_DEMO=1`. Avant une mise en ligne, branchez une vraie authentification (voir `docs/PLAN-DE-TRAVAIL.md`, lot A).
+## Comptes et sécurité
+
+**Premier démarrage.** Le serveur affiche un lien, valable 24 heures, pour créer l'**administrateur système**. Si l'adresse saisie correspond à un compte existant, ce compte est élevé à ce rôle. En cas de perte d'accès : `CADENCE_BOOTSTRAP=1`.
+
+**Création des comptes.** Sur invitation par défaut : un administrateur saisit l'adresse, la personne reçoit un lien à usage unique, valable 72 heures, et choisit son mot de passe. En option (console **Administration → Inscriptions**), les visiteurs peuvent demander un accès : rien n'est ouvert avant validation, qui déclenche la même invitation.
+
+**Protections.** Mots de passe hachés avec scrypt (paramètres OWASP) et contrôlés selon les règles du NIST ; sessions opaques dont seule l'empreinte est stockée, révocables, expirant après 7 jours d'inactivité ou 30 jours ; double authentification TOTP avec codes de secours ; verrouillage progressif des comptes et limitation par adresse IP ; réponses identiques qu'un compte existe ou non ; contrôle de l'origine des requêtes ; en-têtes CSP, HSTS, X-Frame-Options ; journal de sécurité.
+
+**Profils et droits.** Chaque organisation crée ses profils et y coche les droits ; une exception par personne (autoriser ou refuser) l'emporte sur le profil. Le profil s'ajoute au rôle sur le projet : il faut les deux. Personne ne peut accorder un droit qu'il ne possède pas. Le catalogue des droits se trouve dans `server/src/permissions.ts`.
+
+**Mode démo.** `CADENCE_DEMO=1` crée les données d'exemple et permet de choisir un profil sans mot de passe. Il est réservé à un usage local : le serveur refuse de démarrer ainsi en production ou sur le réseau.

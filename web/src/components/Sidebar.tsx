@@ -1,8 +1,8 @@
 import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { NavLink, useNavigate } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, CheckCircle2, ChevronsUpDown, CircleUser, House, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Building2, Check, CheckCircle2, ChevronsUpDown, CircleUser, House, KeyRound, ShieldCheck, Inbox, LogOut, Moon, Network, Plus, Search, Sparkles, Sun, Users } from "lucide-react";
 import { Avatar, Button, Dialog, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, ProjectIcon, cn } from "./ui";
 import { useAiStatus, useApprovals, useMe, useNotifications, useProjects } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
@@ -29,6 +29,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { data: notifs } = useNotifications();
   const { data: approvals } = useApprovals();
   const { data: aiStatus } = useAiStatus();
+  const { data: config } = useQuery({ queryKey: ["auth-config"], queryFn: () => api.get<{ demo: boolean }>("/api/auth/config"), staleTime: Infinity });
   const shell = useShell();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -82,16 +83,17 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <MenuLabel>Connecté en tant que</MenuLabel>
             <div className="flex items-center gap-2 px-2 pb-2"><Avatar user={me} size={26} /><div className="min-w-0"><p className="truncate text-[13px] font-medium">{me?.name}</p><p className="truncate text-[11.5px] text-faint">{me?.title}</p></div></div>
             <MenuItem icon={<CircleUser className="size-3.5" />} onSelect={() => setProfile(true)}>Mon profil</MenuItem>
+            <MenuItem icon={<KeyRound className="size-3.5" />} onSelect={() => { nav("/account"); onNavigate?.(); }}>Sécurité du compte</MenuItem>
             <MenuSeparator />
             <MenuLabel>Organisations</MenuLabel>
             {me?.orgs.map((o) => (
               <MenuItem key={o.id} icon={<Building2 className="size-3.5" />} right={o.id === me.org_id ? <Check className="size-3.5" /> : undefined}
                 onSelect={() => o.id !== me.org_id && switchOrg(o.id)}>{o.name}</MenuItem>
             ))}
-            <MenuItem icon={<Plus className="size-3.5" />} onSelect={() => setCreating(true)}>Créer une organisation</MenuItem>
+            {(me?.platform_role || config?.demo) && <MenuItem icon={<Plus className="size-3.5" />} onSelect={() => setCreating(true)}>Créer une organisation</MenuItem>}
             <MenuSeparator />
             <MenuItem icon={shell.theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />} onSelect={shell.toggleTheme}>{shell.theme === "dark" ? "Thème clair" : "Thème sombre"}</MenuItem>
-            <MenuItem icon={<LogOut className="size-3.5" />} onSelect={async () => { await api.post("/api/auth/logout"); qc.clear(); nav("/login"); }}>Changer d'utilisateur</MenuItem>
+            <MenuItem icon={<LogOut className="size-3.5" />} onSelect={async () => { await api.post("/api/auth/logout"); qc.clear(); nav("/login"); }}>Se déconnecter</MenuItem>
           </MenuContent>
         </Menu>
       </div>
@@ -109,6 +111,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         {link("/ai", <Sparkles className="size-4" />, "Coéquipiers IA", approvals?.length, true)}
         {link("/teams", <Users className="size-4" />, "Équipes")}
         {link("/org", <Network className="size-4" />, "Organisation")}
+        {me?.platform_role && link("/admin", <ShieldCheck className="size-4" />, "Administration")}
       </nav>
 
       <div className="mt-5 flex items-center justify-between px-5 pb-1">

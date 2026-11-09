@@ -14,10 +14,13 @@ import { ApiError } from "@/lib/api";
 
 export function AppLayout() {
   const me = useMe();
+  const loc = useLocation();
   useLiveUpdates(!!me.data);
   if (me.isLoading) return <div className="flex h-full items-center justify-center"><Spinner /></div>;
   if (me.error && (me.error as ApiError).status === 401) return <Navigate to="/login" replace />;
   if (me.error) return <div className="p-8 text-danger">{(me.error as Error).message}</div>;
+  // Un administrateur système n'appartient pas forcément à une organisation
+  if (me.data && !me.data.orgs.length && !["/admin", "/account"].includes(loc.pathname)) return <Navigate to={me.data.platform_role ? "/admin" : "/account"} replace />;
   return <ShellProvider><Shell /></ShellProvider>;
 }
 

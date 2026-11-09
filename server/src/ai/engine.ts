@@ -90,17 +90,22 @@ export class AiEngine {
     if (!("actorId" in e) || (await this.isAi(e.actorId))) return; // jamais de boucle IA → IA
     if (e.type === "task.created" || (e.type === "task.updated" && e.changes.includes("assignee_id"))) {
       const t = await this.svc.db.one<{ assignee_id: string | null }>("SELECT assignee_id FROM tasks WHERE id = $1", [e.taskId]);
-      if (t?.assignee_id && (await this.isAi(t.assignee_id))) {
+      if (t?.assignee_id && (await this.isAi(t.assignee_id)) && (await this.mayDelegate(e.actorId, e.projectId))) {
         await this.start({ agentId: t.assignee_id, kind: "task", taskId: e.taskId, projectId: e.projectId, requestedBy: e.actorId });
       }
     }
     if (e.type === "task.created") await this.fireRules("task_created", e.projectId, e.taskId, e.actorId);
     if (e.type === "task.updated" && e.changes.includes("section_id")) await this.fireRules("task_moved", e.projectId, e.taskId, e.actorId);
-    if (e.type === "comment.created") {
+    if (e.type === "comment.created" && (await this.mayDelegate(e.actorId, e.projectId))) {
       for (const id of e.mentions) if (await this.isAi(id)) {
         await this.start({ agentId: id, kind: "mention", taskId: e.taskId, projectId: e.projectId, requestedBy: e.actorId, commentId: e.commentId });
       }
     }
+  }
+
+  /** Dernier contrôle : quel que soit le chemin qui a produit l'événement, il ne lance rien sans le droit de déléguer. */
+  private async mayDelegate(actorId: string, projectId: string) {
+    return (await this.svc.permissionsOf(actorId, await this.svc.orgOfProject(projectId))).includes("ai.delegate");
   }
 
   private async fireRules(trigger: AiRule["trigger"], projectId: string, taskId: string, actorId: string) {
@@ -142,6 +147,7 @@ export class AiEngine {
   async startAssistant(userId: string, orgId: string, history: { role: "user" | "assistant"; content: string }[], projectId: string | null): Promise<string> {
     if (!history.length || history[history.length - 1].role !== "user") throw badRequest("La conversation doit se terminer par un message de l'utilisateur");
     await this.svc.requireOrg(userId, orgId);
+    await this.svc.requirePerm(userId, orgId, "ai.assistant");
     if (projectId) { await this.svc.require(userId, projectId); if ((await this.svc.orgOfProject(projectId)) !== orgId) throw badRequest("Projet hors de l'organisation active"); }
     const id = uid("run");
     await this.svc.db.query(`INSERT INTO ai_runs (id, org_id, agent_id, kind, project_id, requested_by, status, provider) VALUES ($1,$2,'ai_cadence','assistant',$3,$4,'queued',$5)`,
@@ -156,7 +162,7 @@ export class AiEngine {
     const ctl = new AbortController();
     this.controllers.set(runId, ctl);
     await this.setStatus(runId, "running");
-    const ctx: ToolCtx = { actorId: agent.id, orgId };
+    const ctx: ToolCtx = { actorId: agent.id, orgId, ...(o.projectId ? { scope: { requesterId: o.requestedBy ?? null, projectId: o.projectId } } : {}) };
     try {
       if (!o.taskId || !o.projectId) throw new Error("Aucune tâche associée");
       let task;
@@ -304,13 +310,14 @@ export class AiEngine {
     const a = await this.getApproval(approvalId);
     if (a.status !== "pending") throw badRequest("Cette demande a déjà été traitée");
     const run = await this.getRun(a.run_id);
+    if (run.org_id) await this.svc.requirePerm(userId, run.org_id, "ai.approve");
     if (run.kind === "assistant") { if (run.requested_by !== userId) throw forbidden("Seule la personne qui a lancé l'assistant peut valider"); }
     else if (a.project_id) await this.svc.require(userId, a.project_id, "editor");
     if (edits && approve) {
       // Retoucher, c'est changer le contenu : la cible reste celle qui a été soumise, sinon on agirait ailleurs avec les droits de l'IA
       const input = { ...a.input, ...Object.fromEntries(Object.entries(edits).filter(([k]) => !LOCKED_INPUTS.has(k))) };
       await this.svc.db.query("UPDATE ai_approvals SET input = $1, summary = $2 WHERE id = $3",
-        [JSON.stringify(input), await this.tools.describe({ actorId: a.agent_id, orgId: run.org_id ?? "" }, a.tool, input), approvalId]);
+        [JSON.stringify(input), await this.tools.describe({ actorId: a.agent_id, orgId: run.org_id ?? "", ...(run.kind !== "assistant" && run.project_id ? { scope: { requesterId: run.requested_by, projectId: run.project_id } } : {}) }, a.tool, input), approvalId]);
     }
     await this.svc.db.query("UPDATE ai_approvals SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3", [approve ? "approved" : "rejected", userId, approvalId]);
     await this.svc.db.query("UPDATE notifications SET read = TRUE WHERE approval_id = $1", [approvalId]);
@@ -337,6 +344,7 @@ export class AiEngine {
   async suggestSubtasks(userId: string, taskRef: string) {
     const t = await this.svc.getTask(userId, taskRef);
     await this.svc.require(userId, t.project_id, "editor");
+    await this.svc.projectPerm(userId, t.project_id, "ai.delegate");
     const out = await this.provider.json<{ subtasks: { title: string; days_from_now: number | null }[] }>({
       system: "Tu es un chef de projet expérimenté. Tu découpes le travail en étapes concrètes, actionnables, en français.",
       prompt: `Découpe cette tâche en 3 à 7 sous-tâches concrètes, dans l'ordre. Pour chacune, propose un délai en jours à partir d'aujourd'hui (ou null).\n\nProjet : ${t.project.name}\nTâche : ${t.title}\nDescription : ${t.description || "(aucune)"}\nSous-tâches existantes : ${t.subtasks.map((s) => s.title).join(" ; ") || "(aucune)"}`,
@@ -348,6 +356,7 @@ export class AiEngine {
 
   async projectStatus(userId: string, projectId: string) {
     await this.svc.require(userId, projectId, "editor");
+    await this.svc.projectPerm(userId, projectId, "ai.delegate");
     const p = await this.svc.getProject(userId, projectId);
     const stats = await this.svc.projectStats(userId, projectId);
     const overdue = []; for (const t of (await this.svc.listTasks(userId, { project_id: projectId, overdue: true })).slice(0, 15)) overdue.push(await this.tools.brief(t));
@@ -363,6 +372,7 @@ export class AiEngine {
 
   async parseTasks(userId: string, projectId: string, text: string) {
     await this.svc.require(userId, projectId, "editor");
+    await this.svc.projectPerm(userId, projectId, "ai.delegate");
     const p = await this.svc.getProject(userId, projectId);
     const members = []; for (const m of p.members) members.push({ id: m.user_id, name: (await this.svc.user(m.user_id)).name });
     const out = await this.provider.json<{ tasks: { title: string; description: string; assignee_id: string | null; due_on: string | null; priority: string; section: string | null }[] }>({
@@ -381,6 +391,7 @@ export class AiEngine {
   async improveDescription(userId: string, taskRef: string) {
     const t = await this.svc.getTask(userId, taskRef);
     await this.svc.require(userId, t.project_id, "editor");
+    await this.svc.projectPerm(userId, t.project_id, "ai.delegate");
     return this.provider.json<{ description: string }>({
       system: "Tu rédiges des descriptions de tâches nettes : objectif, contexte, critères de réussite. En français, en Markdown léger.",
       prompt: `Réécris la description de cette tâche pour qu'elle soit claire et actionnable. Garde les faits, n'invente pas de détails.\n\nProjet : ${t.project.name}\nTâche : ${t.title}\nDescription actuelle : ${t.description || "(vide)"}\nCommentaires : ${t.comments.slice(-5).map((c) => c.body).join(" | ") || "(aucun)"}`,
@@ -401,6 +412,7 @@ export class AiEngine {
   }
   async saveRule(userId: string, input: Partial<AiRule> & { project_id: string }) {
     await this.svc.require(userId, input.project_id, "admin");
+    await this.svc.projectPerm(userId, input.project_id, "ai.rules");
     const agent = await this.svc.user(String(input.agent_id));
     if (!agent.is_ai) throw badRequest("L'agent doit être un coéquipier IA");
     if (!(await this.svc.projectRole(agent.id, input.project_id))) throw badRequest(`${agent.name} n'a pas accès au projet`);
@@ -422,6 +434,7 @@ export class AiEngine {
   async deleteRule(userId: string, ruleId: string) {
     const r = await this.getRule(ruleId);
     await this.svc.require(userId, r.project_id, "admin");
+    await this.svc.projectPerm(userId, r.project_id, "ai.rules");
     await this.svc.db.query("DELETE FROM ai_rules WHERE id = $1", [ruleId]);
     await this.svc.log(userId, "rule.deleted", { projectId: r.project_id, data: { name: r.name } });
   }

@@ -17,16 +17,24 @@ if (problems.length) {
 }
 if (dataDir) loadLocalSecret(dataDir);
 
-const { app, provider, db } = await buildApp({
+const demo = process.env.CADENCE_DEMO === "1";
+const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, "") ?? `http://localhost:${port}`;
+const { app, provider, db, provisioning } = await buildApp({
   databaseUrl,
   dataDir,
+  demoLogin: demo,
+  publicUrl,
+  seed: demo, // Sans mode démo, aucune donnée ni compte d'exemple n'est créé
   webDist: resolve(here, "../../web/dist"),
   logger: process.env.NODE_ENV !== "test",
 });
 
 await app.listen({ port, host });
+const setup = demo ? null : await provisioning.bootstrapLink();
 console.log(`\n  Cadence → http://localhost:${port}`);
 console.log(`  Base : ${db.kind === "postgres" ? "PostgreSQL (DATABASE_URL)" : `PostgreSQL embarqué (PGlite)${dataDir ? ` dans ${dataDir}` : ", en mémoire"}`}`);
 console.log(provider.name === "anthropic"
   ? "  IA : Claude (clé ANTHROPIC_API_KEY détectée)\n"
   : "  IA : mode démo (aucune clé ANTHROPIC_API_KEY) — définissez-la pour utiliser Claude\n");
+if (demo) console.log("  Connexion : mode démo, choix d'un profil sans mot de passe\n");
+if (setup) console.log(`  Aucun administrateur système. Créez-le avec ce lien, valable 24 heures :\n  ${setup}\n`);

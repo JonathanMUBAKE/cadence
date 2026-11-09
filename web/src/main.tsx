@@ -16,6 +16,9 @@ import { AgentsPage } from "./pages/Agents";
 import { ProjectPage } from "./pages/Project";
 import { OrganizationPage } from "./pages/Organization";
 import { TeamPage, TeamsPage } from "./pages/Teams";
+import { ActivationPage, ResetPage } from "./pages/AccountLinks";
+import { AccountPage } from "./pages/Account";
+import { AdminPage } from "./pages/Admin";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -25,12 +28,16 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/activation" element={<ActivationPage />} />
+            <Route path="/reinitialisation" element={<ResetPage />} />
             <Route element={<AppLayout />}>
               <Route index element={<HomePage />} />
               <Route path="my-tasks" element={<MyTasksPage />} />
               <Route path="inbox" element={<InboxPage />} />
               <Route path="ai" element={<AgentsPage />} />
               <Route path="org" element={<OrganizationPage />} />
+              <Route path="account" element={<AccountPage />} />
+              <Route path="admin" element={<AdminPage />} />
               <Route path="teams" element={<TeamsPage />} />
               <Route path="teams/:id" element={<TeamPage />} />
               <Route path="projects/:id/:view?" element={<ProjectPage />} />

@@ -72,6 +72,7 @@ export class Importer {
   /** Lit le fichier et propose un projet. Rien n'est créé : la personne relit d'abord. */
   async analyze(userId: string, orgId: string, filename: string, data: Buffer) {
     await this.svc.requireOrg(userId, orgId, "member");
+    await this.svc.requirePerm(userId, orgId, "projects.import");
     if (!data.length) throw badRequest("Le fichier est vide");
     const { text, truncated } = await extractDocument(filename, data);
     const people = (await this.svc.usersOf(orgId)).filter((u) => !u.is_ai);
@@ -107,8 +108,8 @@ export class Importer {
 
   /** Crée le projet relu. En cas d'échec en cours de route, rien ne subsiste. */
   async create(userId: string, orgId: string, input: ImportInput) {
-    const orgRole = await this.svc.requireOrg(userId, orgId, "member");
-    void orgRole;
+    await this.svc.requireOrg(userId, orgId, "member");
+    await this.svc.requirePerm(userId, orgId, "projects.import");
     const people = new Map((await this.svc.usersOf(orgId)).filter((u) => !u.is_ai).map((u) => [u.id, u]));
     const assignees = new Set(input.tasks.flatMap((t) => [t.assignee_id, ...t.subtasks.map((s) => s.assignee_id)]).filter((id): id is string => !!id));
     for (const id of assignees) if (!people.has(id)) throw badRequest("Une personne assignée n'est pas membre de l'organisation");

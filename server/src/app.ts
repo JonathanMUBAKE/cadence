@@ -1,7 +1,8 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
 import { Bus, type DomainEvent } from "./bus.js";
@@ -12,18 +13,26 @@ import { AnthropicProvider, MODEL, type AiProvider } from "./ai/provider.js";
 import { DemoProvider } from "./ai/demo.js";
 import { seedIfEmpty } from "./seed.js";
 import { ATTACHMENT_MAX_BYTES, Attachments } from "./attachments.js";
+import { Access } from "./auth/access.js";
+import { Provisioning } from "./auth/provisioning.js";
+import { privateAuthRoutes, publicAuthRoutes, sessionCookie } from "./auth/routes.js";
+import { Auth, SESSION_COOKIE } from "./auth/service.js";
+import { createHash } from "node:crypto";
 import { Importer } from "./ai/importer.js";
 import { IMPORT_MAX_BYTES } from "./documents/extract.js";
-import { cookieSecret } from "./secrets.js";
+import { cookieSecret, trustProxySetting } from "./secrets.js";
 
 export interface AppOptions {
   databaseUrl?: string; dataDir?: string; provider?: AiProvider | "auto" | "demo"; webDist?: string;
   seed?: boolean; demoDelayMs?: number; logger?: boolean;
+  /** Connexion par simple choix d'un profil, sans mot de passe. Par défaut : CADENCE_DEMO=1. */
+  demoLogin?: boolean;
+  /** Adresse publique utilisée dans les liens envoyés par e-mail. */
+  publicUrl?: string;
 }
 
-declare module "fastify" { interface FastifyRequest { userId: string; orgId: string } }
+declare module "fastify" { interface FastifyRequest { userId: string; orgId: string; sessionId: string } }
 
-const COOKIE = "cadence_uid";
 const ORG_COOKIE = "cadence_org";
 
 export async function buildApp(opts: AppOptions = {}) {
@@ -40,8 +49,14 @@ export async function buildApp(opts: AppOptions = {}) {
   const detachMail = mail.attach();
   const attachments = new Attachments(svc);
   const importer = new Importer(svc, provider);
+  await svc.backfillProfiles();
+  const demoLogin = opts.demoLogin ?? process.env.CADENCE_DEMO === "1";
+  const secureCookies = process.env.NODE_ENV === "production" && !demoLogin;
+  const authService = new Auth(svc);
+  const access = new Access(svc, authService);
+  const provisioning = new Provisioning(svc, authService, mail, access, opts.publicUrl);
 
-  const app = Fastify({ logger: opts.logger ?? false });
+  const app = Fastify({ logger: opts.logger ?? false, trustProxy: trustProxySetting() });
   await app.register(cookie, { secret: cookieSecret() });
   app.addHook("onClose", async () => { detach(); detachMail(); await ai.shutdown(); await mail.shutdown(); await db.close(); });
 
@@ -56,30 +71,64 @@ export async function buildApp(opts: AppOptions = {}) {
     return reply.status(500).send({ error: "Erreur interne" });
   });
 
-  const cookieOpts = { path: "/", httpOnly: true, sameSite: "lax" as const, signed: true, maxAge: 60 * 60 * 24 * 30 };
+  // ------------------------------------------------------------------ protections HTTP
+  const allowedOrigins = new Set<string>(opts.publicUrl ? [new URL(opts.publicUrl).host] : []);
+  if (process.env.NODE_ENV !== "production") allowedOrigins.add("localhost:5173");
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.method === "GET" || req.method === "HEAD") return;
+    const origin = req.headers.origin;
+    if (!origin) return;
+    let host: string | null = null;
+    try { host = new URL(origin).host; } catch { /* origine illisible : refusée ci-dessous */ }
+    if (host !== req.headers.host && !(host && allowedOrigins.has(host))) return reply.status(403).send({ error: "Origine non autorisée" });
+  });
+  const indexPath = opts.webDist ? join(opts.webDist, "index.html") : null;
+  const inlineScripts = indexPath && existsSync(indexPath) ? [...readFileSync(indexPath, "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash("sha256").update(m[1].replace(/\r\n?/g, "\n")).digest("base64")}'`) : []; // Le navigateur normalise les fins de ligne avant de calculer l'empreinte
+  const contentPolicy = [
+    "default-src 'self'", `script-src 'self' ${inlineScripts.join(" ")}`.trim(), "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:", "connect-src 'self'", "frame-src 'self'", "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'",
+  ].join("; ");
+  app.addHook("onSend", async (_req, reply, payload) => {
+    reply.header("X-Content-Type-Options", "nosniff").header("Referrer-Policy", "strict-origin-when-cross-origin").header("X-Frame-Options", "SAMEORIGIN").header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (secureCookies) reply.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    if (String(reply.getHeader("content-type") ?? "").includes("text/html") && !reply.hasHeader("Content-Security-Policy")) reply.header("Content-Security-Policy", contentPolicy);
+    return payload;
+  });
+
+  const cookieOpts = { path: "/", httpOnly: true, sameSite: "lax" as const, signed: true, secure: secureCookies, maxAge: 60 * 60 * 24 * 30 };
   const unsign = (req: FastifyRequest, name: string) => { const raw = req.cookies[name]; const u = raw ? req.unsignCookie(raw) : null; return u?.valid ? u.value : null; };
 
-  // ------------------------------------------------------------------ authentification (espace de démo)
+  // ------------------------------------------------------------------ authentification
   const auth = async (req: FastifyRequest, reply: FastifyReply) => {
-    const id = unsign(req, COOKIE);
-    if (!id || !(await db.one("SELECT id FROM users WHERE id = $1 AND NOT is_ai", [id]))) return reply.status(401).send({ error: "Non connecté" });
-    req.userId = id;
-    const orgs = await svc.orgsOf(id);
+    const session = await authService.resolve(req.cookies[SESSION_COOKIE]);
+    if (!session) return reply.status(401).send({ error: "Non connecté" });
+    req.userId = session.userId;
+    req.sessionId = session.sessionId;
+    const orgs = await svc.orgsOf(session.userId);
     const wanted = unsign(req, ORG_COOKIE);
     req.orgId = orgs.find((o) => o.id === wanted)?.id ?? orgs[0]?.id ?? "";
   };
 
+  const requestInfo = (req: FastifyRequest) => ({ ip: req.ip, userAgent: String(req.headers["user-agent"] ?? "") });
   app.post("/api/auth/login", async (req, reply) => {
-    const { user_id } = z.object({ user_id: z.string() }).parse(req.body);
-    const u = await svc.user(user_id);
-    if (u.is_ai) throw forbidden("Un coéquipier IA ne peut pas se connecter");
-    reply.setCookie(COOKIE, u.id, cookieOpts);
+    const body = z.union([z.object({ email: z.string().trim().max(320), password: z.string().min(1).max(1024) }), z.object({ user_id: z.string() })]).parse(req.body);
+    if ("user_id" in body) {
+      if (!demoLogin) return reply.status(400).send({ error: "E-mail et mot de passe obligatoires" });
+      const u = await svc.user(body.user_id);
+      if (u.is_ai) throw forbidden("Un coéquipier IA ne peut pas se connecter");
+      sessionCookie(reply, await authService.createSession(u.id, requestInfo(req)), secureCookies);
+      reply.clearCookie(ORG_COOKIE, { path: "/" });
+      return u;
+    }
+    const result = await authService.login(body.email, body.password, requestInfo(req));
+    sessionCookie(reply, result.token, secureCookies);
     reply.clearCookie(ORG_COOKIE, { path: "/" });
-    return u;
+    return { status: result.status };
   });
-  app.post("/api/auth/logout", async (_req, reply) => { reply.clearCookie(COOKIE, { path: "/" }); reply.clearCookie(ORG_COOKIE, { path: "/" }); return { ok: true }; });
-  // Route publique : uniquement ce que la page de choix du profil affiche, jamais d'e-mail
-  app.get("/api/auth/users", async () => (await db.query("SELECT id, name, title, avatar_color, is_ai, avatar_version FROM users WHERE NOT is_ai ORDER BY name")).map(withAvatar));
+  const authDeps = { auth: authService, provisioning, access, secureCookies, demoLogin, clearOrgCookie: (reply: FastifyReply) => reply.clearCookie(ORG_COOKIE, { path: "/" }) };
+  publicAuthRoutes(app, authDeps);
+  // Choix d'un profil sans mot de passe : uniquement en mode démo, sinon la route n'existe pas
+  if (demoLogin) app.get("/api/auth/users", async () => (await db.query("SELECT id, name, title, avatar_color, is_ai, avatar_version FROM users WHERE NOT is_ai AND status = 'active' ORDER BY name")).map(withAvatar));
 
   app.register(async (r) => {
     r.addHook("preHandler", auth);
@@ -89,7 +138,11 @@ export async function buildApp(opts: AppOptions = {}) {
     const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable();
     const Role = z.enum(["viewer", "commenter", "editor", "admin"]);
 
-    r.get("/api/me", async (req) => ({ ...(await svc.user(me(req))), org_id: org(req), orgs: await svc.orgsOf(me(req)) }));
+    privateAuthRoutes(r, authDeps);
+    r.get("/api/me", async (req) => {
+      const security = await db.one<{ platform_role: string | null; totp_enabled: boolean }>("SELECT platform_role, totp_enabled FROM users WHERE id = $1", [me(req)]);
+      return { ...(await svc.user(me(req))), org_id: org(req), orgs: await svc.orgsOf(me(req)), permissions: org(req) ? await svc.permissionsOf(me(req), org(req)) : [], platform_role: security?.platform_role ?? null, mfa_enabled: !!security?.totp_enabled };
+    });
     r.get("/api/users", async (req) => svc.visibleUsers(me(req), org(req)));
 
     // ---------------------------------------------------------------- photos de profil
@@ -116,6 +169,7 @@ export async function buildApp(opts: AppOptions = {}) {
 
     // ---------------------------------------------------------------- organisations, entités, équipes
     r.post("/api/orgs", async (req, reply) => {
+      if (!demoLogin) await provisioning.requireSuperAdmin(me(req));
       const o = await svc.createOrg(me(req), z.object({ name: z.string().min(1).max(120), domains: z.array(z.string()).optional() }).parse(req.body));
       reply.setCookie(ORG_COOKIE, o.id, cookieOpts);
       return o;
@@ -260,6 +314,7 @@ export async function buildApp(opts: AppOptions = {}) {
       const { agent_id, instructions } = z.object({ agent_id: z.string(), instructions: z.string().max(4000).optional() }).parse(req.body);
       const t = await svc.getTask(me(req), req.params.id);
       await svc.require(me(req), t.project_id, "editor");
+      await svc.projectPerm(me(req), t.project_id, "ai.delegate");
       const agent = await svc.user(agent_id);
       if (!agent.is_ai) throw forbidden("Ce membre n'est pas un coéquipier IA");
       if (!(await svc.projectRole(agent.id, t.project_id))) throw forbidden(`${agent.name} n'a pas accès à ce projet. Ajoutez-le aux membres du projet.`);
@@ -300,7 +355,9 @@ export async function buildApp(opts: AppOptions = {}) {
       const send = (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`);
       send({ type: "hello" });
       const off = bus.on((e) => { route(e, userId).then((out) => { if (out) send(out); }, () => {}); });
-      const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
+      const token = req.cookies[SESSION_COOKIE];
+      // Une session révoquée ou un compte suspendu cesse aussi de recevoir le temps réel
+      const ping = setInterval(() => { void authService.resolve(token).then((s) => { if (s) res.write(": ping\n\n"); else res.end(); }, () => res.end()); }, 25_000);
       req.raw.on("close", () => { off(); clearInterval(ping); });
     });
   });
@@ -330,5 +387,5 @@ export async function buildApp(opts: AppOptions = {}) {
     });
   }
 
-  return { app, db, svc, ai, bus, provider, mail };
+  return { app, db, svc, ai, bus, provider, mail, auth: authService, access, provisioning };
 }

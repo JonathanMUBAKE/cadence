@@ -19,6 +19,7 @@ export class Attachments {
   async add(actorId: string, ref: string, filename: string, data: Buffer): Promise<Attachment> {
     const task = await this.svc.taskRow(await this.svc.resolveTaskId(actorId, ref));
     await this.svc.require(actorId, task.project_id, "commenter");
+    await this.svc.projectPerm(actorId, task.project_id, "attachments.upload");
     return this.insert(actorId, task.id, task.project_id, null, filename, data);
   }
 
@@ -26,6 +27,7 @@ export class Attachments {
     const c = await this.svc.db.one<{ task_id: string; author_id: string; project_id: string }>("SELECT c.task_id, c.author_id, t.project_id FROM comments c JOIN tasks t ON t.id = c.task_id WHERE c.id = $1", [commentId]);
     if (!c) throw notFound("Commentaire introuvable");
     const role = await this.svc.require(actorId, c.project_id, "commenter");
+    await this.svc.projectPerm(actorId, c.project_id, "attachments.upload");
     if (c.author_id !== actorId && role !== "admin") throw forbidden("Seuls l'auteur et les administrateurs du projet peuvent joindre un fichier à ce commentaire");
     return this.insert(actorId, c.task_id, c.project_id, commentId, filename, data);
   }
@@ -50,6 +52,8 @@ export class Attachments {
     if (!a) throw notFound("Pièce jointe introuvable");
     return a;
   }
+
+  async projectOf(id: string) { return (await this.row(id)).project_id; }
 
   async file(actorId: string, id: string) {
     const a = await this.row(id);
@@ -78,6 +82,7 @@ export class Attachments {
   async remove(actorId: string, id: string) {
     const a = await this.row(id);
     const role = await this.svc.require(actorId, a.project_id, "commenter");
+    await this.svc.projectPerm(actorId, a.project_id, "attachments.delete");
     if (a.uploader_id !== actorId && role !== "admin") throw forbidden("Seuls l'auteur et les administrateurs du projet peuvent supprimer cette pièce jointe");
     await this.svc.db.query("DELETE FROM attachments WHERE id = $1", [id]);
     await this.svc.log(actorId, "attachment.removed", { projectId: a.project_id, taskId: a.task_id, data: { filename: a.filename } });

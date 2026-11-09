@@ -7,7 +7,7 @@ import { ImportProjectDialog } from "./ImportProject";
 import { Avatar, Button, Dialog, PROJECT_ICONS, ProjectIcon, cn } from "./ui";
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker } from "./pickers";
 import { AiBadge } from "./ai";
-import { useMe, useProject, useProjects, useTeams, useUserMap } from "@/lib/hooks";
+import { useCan, useMe, useProject, useProjects, useTeams, useUserMap } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { api } from "@/lib/api";
 import type { ParsedTask, ProjectDetail, StatusProposal } from "@/lib/types";
@@ -33,6 +33,7 @@ export function NewProjectDialog() {
   const [due, setDue] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const can = useCan();
   const { data: teams } = useTeams();
   const { data: me } = useMe();
   const orgAdmin = ["owner", "admin"].includes(me?.orgs.find((o) => o.id === me.org_id)?.role ?? "");
@@ -64,7 +65,7 @@ export function NewProjectDialog() {
     <>
     <ImportProjectDialog open={importing} onOpenChange={setImporting} />
     <Dialog open={shell.newProject} onOpenChange={shell.setNewProject} title="Nouveau projet" description="Vous en serez administrateur. Ajoutez ensuite vos coéquipiers, humains et IA."
-      footer={<><Button variant="ai" className="mr-auto" icon={<FileUp className="size-3.5" />} onClick={() => { shell.setNewProject(false); setImporting(true); }}>Importer un fichier</Button><Button onClick={() => shell.setNewProject(false)}>Annuler</Button><Button variant="primary" disabled={!name.trim()} loading={saving} onClick={submit}>Créer le projet</Button></>}>
+      footer={<>{can("projects.import") && <Button variant="ai" className="mr-auto" icon={<FileUp className="size-3.5" />} onClick={() => { shell.setNewProject(false); setImporting(true); }}>Importer un fichier</Button>}<Button onClick={() => shell.setNewProject(false)}>Annuler</Button><Button variant="primary" disabled={!name.trim()} loading={saving} onClick={submit}>Créer le projet</Button></>}>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <ProjectIcon icon={icon} color={color} size={40} />

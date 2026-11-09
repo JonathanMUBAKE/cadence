@@ -75,14 +75,14 @@ export class MailService {
     return r?.settings?.mail ?? null;
   }
   async getConfig(actorId: string, orgId: string): Promise<MailConfig | null> {
-    await this.svc.requireOrg(actorId, orgId, "admin");
+    await this.svc.requirePerm(actorId, orgId, "org.mail");
     const m = await this.stored(orgId);
     if (!m) return null;
     const { password_sealed, ...smtp } = m.smtp;
     return { domain: m.domain, from_name: m.from_name, notifications: m.notifications, smtp: { ...smtp, password_set: !!password_sealed } };
   }
   async updateConfig(actorId: string, orgId: string, input: MailConfigInput) {
-    await this.svc.requireOrg(actorId, orgId, "admin");
+    await this.svc.requirePerm(actorId, orgId, "org.mail");
     const domain = input.domain.trim().toLowerCase();
     if (!DOMAIN_RE.test(domain)) throw badRequest("Nom de domaine invalide (exemple : mon-entreprise.fr)");
     const host = input.smtp.host.trim();
@@ -151,7 +151,7 @@ export class MailService {
       ORDER BY CASE s.target_type WHEN 'org' THEN 0 WHEN 'unit' THEN 1 ELSE 2 END, name`, [orgId, m.domain]);
   }
   async setAddress(actorId: string, orgId: string, id: string, localPart: string) {
-    await this.svc.requireOrg(actorId, orgId, "admin");
+    await this.svc.requirePerm(actorId, orgId, "org.mail");
     const m = await this.stored(orgId);
     if (!m) throw badRequest("Configurez d'abord la messagerie de l'organisation");
     const local = localPart.trim().toLowerCase();
@@ -218,7 +218,7 @@ export class MailService {
 
   /** E-mail de test envoyé à l'administrateur, depuis contact@. */
   async test(actorId: string, orgId: string) {
-    await this.svc.requireOrg(actorId, orgId, "admin");
+    await this.svc.requirePerm(actorId, orgId, "org.mail");
     const me = await this.svc.user(actorId);
     if (!me.email) throw badRequest("Votre profil n'a pas d'adresse e-mail");
     const m = await this.stored(orgId);
@@ -230,7 +230,7 @@ export class MailService {
   }
 
   async log(actorId: string, orgId: string) {
-    await this.svc.requireOrg(actorId, orgId, "admin");
+    await this.svc.requirePerm(actorId, orgId, "org.mail");
     return this.db.query("SELECT id, from_address, to_address, subject, status, error, created_at FROM email_log WHERE org_id = $1 ORDER BY created_at DESC LIMIT 50", [orgId]);
   }
 

@@ -8,7 +8,8 @@ import { AssigneePicker } from "@/components/pickers";
 import { AvatarUpload } from "@/components/AvatarUpload";
 import { OrgMail } from "./OrgMail";
 import { ORG_ROLE } from "@/components/Sidebar";
-import { useMe, useServiceAddress, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
+import { useCan, useMe, useServiceAddress, useTeams, useUnits, useUserMap, useUsers } from "@/lib/hooks";
+import { InvitationsPanel, MemberAccessButton, ProfilesPanel, useProfiles } from "./OrgAccess";
 import { api } from "@/lib/api";
 import type { OrgUnit } from "@/lib/types";
 
@@ -18,9 +19,11 @@ export function OrganizationPage() {
   const { data: me } = useMe();
   const { data: units, isLoading } = useUnits();
   const { data: people } = useUsers();
-  const [tab, setTab] = useState<"tree" | "people" | "mail">("tree");
+  const [tab, setTab] = useState<"tree" | "people" | "profiles" | "mail">("tree");
+  const can = useCan();
   const org = me?.orgs.find((o) => o.id === me.org_id);
   const isAdmin = org?.role === "owner" || org?.role === "admin";
+  const canManage = can("org.members"), canProfiles = can("org.profiles"), canMail = can("org.mail");
   const humans = (people ?? []).filter((u) => !u.is_ai);
 
   return (
@@ -34,12 +37,12 @@ export function OrganizationPage() {
         </p>
       </header>
       <div className="mb-5 flex gap-1 border-b border-line">
-        {([["tree", "Organigramme"], ["people", "Personnes"], ...(isAdmin ? [["mail", "Messagerie"]] : [])] as [typeof tab, string][]).map(([k, l]) => (
+        {([["tree", "Organigramme"], ["people", "Personnes"], ...(canProfiles ? [["profiles", "Profils et droits"]] : []), ...(canMail ? [["mail", "Messagerie"]] : [])] as [typeof tab, string][]).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className={cn("-mb-px border-b-2 px-2.5 pb-2.5 text-[13.5px]", tab === k ? "border-fg font-medium text-fg" : "border-transparent text-muted hover:text-fg")}>{l}</button>
         ))}
       </div>
       {isLoading ? <Spinner /> : tab === "tree" ? <Tree units={units ?? []} isAdmin={isAdmin} />
-        : tab === "mail" && isAdmin ? <OrgMail orgName={org?.name ?? ""} /> : <People units={units ?? []} isAdmin={isAdmin} />}
+        : tab === "mail" && canMail ? <OrgMail orgName={org?.name ?? ""} /> : tab === "profiles" && canProfiles ? <ProfilesPanel /> : <><People units={units ?? []} isAdmin={isAdmin} canManage={canManage} canStructure={can("org.structure")} />{canManage && <InvitationsPanel />}</>}
     </div>
   );
 }
@@ -182,33 +185,36 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   return <section><h3 className="mb-1.5 text-[12px] font-medium text-muted">{title}</h3>{children}</section>;
 }
 
-function People({ units, isAdmin }: { units: OrgUnit[]; isAdmin: boolean }) {
+function People({ units, isAdmin, canManage, canStructure }: { units: OrgUnit[]; isAdmin: boolean; canManage: boolean; canStructure: boolean }) {
   const { data: people } = useUsers();
   const { data: me } = useMe();
+  const profiles = useProfiles(canManage);
   const qc = useQueryClient();
   const set = (url: string, body: unknown, ok: string) => api.put(url, body).then(() => { qc.invalidateQueries({ queryKey: ["users"] }); qc.invalidateQueries({ queryKey: ["units"] }); toast.success(ok); }, (e) => toast.error(e.message));
   const sel = "h-8 max-w-[220px] rounded-md border border-line bg-bg/60 px-2 text-[12.5px] outline-none disabled:border-transparent disabled:bg-transparent";
   return (
     <div className="overflow-x-auto rounded-2xl border border-line bg-panel shadow-sm">
       <table className="w-full min-w-[640px] text-left text-[13px]">
-        <thead className="border-b border-line text-[12px] text-muted"><tr><th className="px-4 py-2.5 font-medium">Personne</th><th className="px-2 font-medium">Rôle</th><th className="px-2 font-medium">Entité</th></tr></thead>
+        <thead className="border-b border-line text-[12px] text-muted"><tr><th className="px-4 py-2.5 font-medium">Personne</th><th className="px-2 font-medium">Profil</th><th className="px-2 font-medium">Entité</th>{canManage && <th className="px-2 font-medium">Droits</th>}</tr></thead>
         <tbody>
           {(people ?? []).filter((u) => u.id !== "ai_cadence").map((u) => (
             <tr key={u.id} className="border-b border-line last:border-b-0">
-              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><AvatarUpload compact user={u} size={30} editable={isAdmin || u.id === me?.id} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.title}</span></span></span></td>
+              <td className="px-4 py-2.5"><span className="flex items-center gap-2.5"><AvatarUpload compact user={u} size={30} editable={isAdmin || u.id === me?.id} /><span><span className="block font-medium">{u.name}</span><span className="block text-[12px] text-faint">{u.is_ai ? "Coéquipier IA" : u.status === "invited" ? "Invitation en attente" : u.title}</span></span></span></td>
               <td className="px-2">
-                <select aria-label={`Rôle de ${u.name}`} disabled={!isAdmin || u.id === me?.id} value={u.org_role} className={sel}
-                  onChange={(e) => set(`/api/org/members/${u.id}`, { role: e.target.value }, "Rôle mis à jour")}>
-                  {Object.entries(ORG_ROLE).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                </select>
+                {canManage && profiles?.length && !u.is_ai
+                  ? <select aria-label={`Profil de ${u.name}`} disabled={u.id === me?.id} value={u.profile_id ?? ""} className={sel} onChange={(e) => set(`/api/org/members/${u.id}/profile`, { profile_id: e.target.value }, "Profil mis à jour")}>
+                      {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  : <span className="text-[12.5px] text-muted">{ORG_ROLE[u.org_role]}</span>}
               </td>
               <td className="px-2">
-                <select aria-label={`Entité de ${u.name}`} disabled={!isAdmin} value={u.unit_id ?? ""} className={sel}
+                <select aria-label={`Entité de ${u.name}`} disabled={!canStructure} value={u.unit_id ?? ""} className={sel}
                   onChange={(e) => set(`/api/org/members/${u.id}/unit`, { unit_id: e.target.value || null }, "Rattachement mis à jour")}>
                   <option value="">Non rattaché</option>
                   {units.map((x) => <option key={x.id} value={x.id}>{" ".repeat(x.depth * 2)}{x.name}</option>)}
                 </select>
               </td>
+              {canManage && <td className="px-2">{!u.is_ai && u.id !== me?.id && <MemberAccessButton user={u} />}</td>}
             </tr>
           ))}
         </tbody>

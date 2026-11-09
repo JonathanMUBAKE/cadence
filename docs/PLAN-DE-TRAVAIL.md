@@ -64,7 +64,7 @@ Architecture et modules : voir `README.md` (section Architecture) et le rapport 
 
 Objectif : plus personne ne peut se connecter à la place d'un autre ni lister les utilisateurs.
 
-- [ ] **A1. Vraie authentification par e-mail + mot de passe** (corrige E1)
+- [x] **A1. Vraie authentification par e-mail + mot de passe** (corrige E1)
   - Migration `004_authentification.sql` : colonne `users.password_hash`, table `sessions` (id, user_id, created_at, expires_at, ip, user_agent, revoked_at), table `login_attempts`.
   - Hachage **argon2id** (paquet `@node-rs/argon2`) ou `crypto.scrypt` natif si on veut zéro dépendance native.
   - `POST /api/auth/login {email, password}` ; message d'erreur unique « E-mail ou mot de passe incorrect » (ne pas révéler si l'e-mail existe).
@@ -73,7 +73,7 @@ Objectif : plus personne ne peut se connecter à la place d'un autre ni lister l
   - **Mode démo conservé** derrière `CADENCE_DEMO=1` (choix d'un profil), désactivé par défaut en production.
   - Données de démo : mot de passe commun documenté dans le README (ex. `cadence-demo`).
   - Tests : connexion OK, mauvais mot de passe → 401, IA → refus, session révoquée → 401, cookie forgé → 401.
-- [ ] **A2. Fermer la liste publique des utilisateurs** (corrige E2)
+- [x] **A2. Fermer la liste publique des utilisateurs** (corrige E2)
   - Supprimer `GET /api/auth/users` hors mode démo ; page de connexion = formulaire e-mail + mot de passe.
   - Test : `GET /api/auth/users` → 404 quand `CADENCE_DEMO` n'est pas actif.
 - [ ] **A3. Limitation de débit et en-têtes** (corrige E3)
@@ -83,7 +83,7 @@ Objectif : plus personne ne peut se connecter à la place d'un autre ni lister l
 - [x] **A4. Secrets obligatoires en production** (corrige E4)
   - Si `NODE_ENV=production` et que `COOKIE_SECRET` ou `CADENCE_SECRET_KEY` manque ou fait moins de 32 caractères → refuser de démarrer avec un message clair.
   - Documenter dans `.env.example` et le README.
-- [ ] **A5. Mot de passe oublié** (utilise la messagerie existante)
+- [x] **A5. Mot de passe oublié** (utilise la messagerie existante)
   - Lien à usage unique valable 30 min, envoyé depuis `contact@<domaine>` de l'organisation (ou SMTP plateforme, voir Lot C).
 
 **Critère de fin du lot A** : les 4 failles E1–E4 ont chacune un test qui échouait avant et passe après.
@@ -170,3 +170,6 @@ Ne pas commencer le Lot D3 avant la réponse à Q1.
 | 2026-11-09 | Claude (session sur l'ordinateur) | Stabilisation | Tableau Kanban : dépôt fiable dans une colonne vide ou courte. Mentions accentuées, dates impossibles, membre inexistant, retards incohérents, plafond de 500 tâches, clés identiques entre organisations, exécutions IA orphelines ou impossibles à annuler, règles sur une section étrangère, date locale, `npm run dev` sous Windows, page d'erreur. E5 à E9 restent à faire (lot B). | `lot-a-securite` |
 | 2026-11-09 | Claude (session sur l'ordinateur) | F (partiel) | Pièces jointes des tâches (F1, droits F3, images affichées). Import d'un projet depuis Word, Excel, CSV ou texte, avec relecture avant création. Puis pièces jointes des commentaires (F1), aperçu intégré (F2 : texte structuré pour Word, tableau pour Excel, pas de HTML venu d'un fichier), import des .doc, .xls et PDF, outil `read_attachment` pour les coéquipiers IA. SheetJS 0.20.3 installé depuis le CDN de l'éditeur, car la version du registre npm a des failles connues. Migrations 005 et 006 : 004 est prise par les rapports, l'authentification devra utiliser 007. | `lot-f-documents` |
 | 2026-11-09 | Claude (session sur l'ordinateur) | Droits | Revue des actions sensibles. Suppression et sortie d'une tâche réservées à l'auteur et aux administrateurs ; suppression de section et archivage aux administrateurs ; actions IA payantes aux éditeurs ; cible d'une validation IA verrouillée ; annuaire limité pour les invités ; dernier responsable d'équipe protégé ; confirmations et journal complétés. Temps réel : relecture à la reconnexion. | `lot-f-documents` |
+| 2026-11-09 | Claude (session sur l'ordinateur) | A | Authentification complète (A1, A2, A5 ; A3 sans @fastify/rate-limit : limites maison sur la connexion, en-têtes et contrôle d'origine). Hachage scrypt plutôt qu'argon2, sans dépendance native. Administrateur système (C1) créé par lien affiché au démarrage, sans mot de passe en ligne de commande. Profils dynamiques et exceptions par personne. Q2 tranchée : mode démo avec `CADENCE_DEMO=1`, local uniquement. Migration 007 ; les rapports (004) restent sur leur branche. | `lot-a-authentification` |
+| 2026-11-09 | Claude (session sur l'ordinateur) | A (audit) | Audit de sécurité, puis correction des 3 failles critiques et 6 élevées, avec 31 tests dans `durcissement.test.ts`. Un compte en attente n'a de lien que par sa première organisation ; compte suspendu impossible à inviter, ses liens annulés. Réinitialisation uniquement par le SMTP de la plateforme. Ancienne route de rôle soumise à la règle des profils. Coéquipiers IA limités au périmètre du demandeur ; @mention et assignation soumises à `ai.delegate`. Essais de connexion comptés avant vérification, scrypt plafonné à 2 calculs, `TRUST_PROXY` en nombre de proxys. 2FA verrouillée par compte (migration 008). Jetons après le `#` des liens. Restent : 8 failles moyennes de l'audit, 2FA obligatoire pour les administrateurs, confirmation de l'adresse à la première invitation. | `lot-a-authentification` |
+| 2026-11-09 | Claude (session sur l'ordinateur) | A (audit) | Audit multi-tenant : 110 routes × 7 profils, scénarios d'attaque, schéma et qualité. Constats, corrections par lots et décisions dans `docs/AUDIT-MULTI-TENANT.md`. Aucune correction appliquée à ce stade. | `lot-a-authentification` |

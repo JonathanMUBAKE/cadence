@@ -31,13 +31,24 @@ export function loadLocalSecret(dataDir: string) {
   local = secret;
 }
 
+/**
+ * TRUST_PROXY : nombre de proxys devant Cadence, ou leurs adresses (IP, CIDR).
+ * Jamais « tout accepter » : l'adresse la plus à gauche de X-Forwarded-For est choisie par le visiteur, qui échapperait ainsi aux limites.
+ */
+export function trustProxySetting(value = process.env.TRUST_PROXY): boolean | string | ((address: string, hop: number) => boolean) {
+  if (!value || value === "0") return false;
+  if (!/^\d+$/.test(value)) return value;
+  const hops = Number(value);
+  return (_address, hop) => hop < hops;
+}
+
 /** Raisons de refuser le démarrage : une configuration dangereuse ne doit jamais tourner silencieusement. */
 export function startupProblems(env: Record<string, string | undefined>, o: { host: string; databaseUrl: boolean }): string[] {
   const out: string[] = [];
   const production = env.NODE_ENV === "production";
-  if ((production || !LOOPBACK.has(o.host)) && env.CADENCE_DEMO !== "1") {
-    out.push(`La connexion de démonstration, sans mot de passe, serait accessible depuis le réseau (HOST=${o.host}${production ? ", NODE_ENV=production" : ""}). Retirez HOST pour rester sur cet ordinateur, ou définissez CADENCE_DEMO=1 pour accepter ce risque.`);
-  }
+  const exposed = !LOOPBACK.has(o.host);
+  if (env.CADENCE_DEMO === "1" && (production || exposed)) out.push("Le mode démo permet de se connecter sans mot de passe : il est réservé à un usage local. Retirez CADENCE_DEMO, ou retirez HOST et NODE_ENV=production.");
+  if ((production || exposed) && !env.PUBLIC_URL) out.push("PUBLIC_URL est obligatoire : les liens d'invitation et de réinitialisation envoyés par e-mail en dépendent (ex. https://cadence.exemple.com).");
   if (production || o.databaseUrl) {
     for (const name of ["COOKIE_SECRET", "CADENCE_SECRET_KEY"]) {
       if ((env[name]?.length ?? 0) < MIN_SECRET_LENGTH) out.push(`${name} est obligatoire ici et doit faire au moins ${MIN_SECRET_LENGTH} caractères.`);

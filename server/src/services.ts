@@ -1,5 +1,6 @@
 import { now, uid, type Db, type Queryable, type Row } from "./db.js";
 import type { Bus } from "./bus.js";
+import { SYSTEM_PROFILES, effectivePermissions, permissionLabel, type BaseRole, type Permission } from "./permissions.js";
 
 // ---------------------------------------------------------------------------
 // Types exposés par l'API
@@ -16,7 +17,7 @@ export interface User {
   /** Lien versionné vers la photo de profil, ou null (initiales). */
   avatar_url: string | null;
 }
-export interface OrgUser extends User { org_role: OrgRole; unit_id: string | null }
+export interface OrgUser extends User { org_role: OrgRole; unit_id: string | null; profile_id: string | null; status: string }
 export interface Organization { id: string; name: string; slug: string; domains: string[]; role: OrgRole }
 export interface OrgUnit {
   id: string; org_id: string; parent_id: string | null; name: string; kind: string; manager_id: string | null;
@@ -59,6 +60,7 @@ const ORG_RANK: Record<OrgRole, number> = { guest: 1, member: 2, admin: 3, owner
 /** Date du calendrier local au format AAAA-MM-JJ : « aujourd'hui » suit l'heure de l'installation, pas UTC. */
 export const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 export const today = () => localDate();
+export const systemProfileId = (orgId: string, role: BaseRole) => `prf_${role}_${orgId}`;
 export const isRealDate = (v: string) => { const t = Date.parse(`${v}T00:00:00Z`); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v; };
 const assertDates = (...values: (string | null | undefined)[]) => { for (const v of values) if (v && !isRealDate(v)) throw badRequest(`Date invalide : ${v}`); };
 /** Reconnaît @Prénom sans s'arrêter aux lettres accentuées, que \b ne connaît pas. */
@@ -103,7 +105,9 @@ const TASK_COLS = `t.*, p.key || '-' || t.number AS key`;
 
 /** Ajoute le lien de la photo (versionné : le navigateur peut la garder en cache indéfiniment). */
 export const withAvatar = <T extends Row>(u: T) => {
-  const { avatar_version, ...rest } = u as T & { avatar_version?: number };
+  // Aucune donnée d'authentification ne doit jamais quitter le serveur par ce chemin
+  const { avatar_version, password_hash: _p, totp_secret: _t, totp_last_step: _s, recovery_codes: _r, failed_logins: _f, locked_until: _l, last_login_at: _a, access_request_note: _n, platform_role: _x, totp_enabled: _e, mfa_failures: _mf, mfa_locked_until: _ml, ...rest } = u as T & Record<string, unknown> & { avatar_version?: number };
+  void [_p, _t, _s, _r, _f, _l, _a, _n, _x, _e, _mf, _ml];
   return { ...rest, avatar_url: Number(avatar_version) > 0 ? `/api/avatars/${rest.id}?v=${Number(avatar_version)}` : null };
 };
 const AVATAR_MAX = 512 * 1024;
@@ -142,7 +146,7 @@ export class Services {
     return r ? (withAvatar(r) as unknown as User) : null;
   }
   async usersOf(orgId: string): Promise<OrgUser[]> {
-    return (await this.db.query<Row>(`SELECT u.*, om.role AS org_role, om.unit_id FROM users u JOIN org_members om ON om.user_id = u.id
+    return (await this.db.query<Row>(`SELECT u.*, om.role AS org_role, om.unit_id, om.profile_id FROM users u JOIN org_members om ON om.user_id = u.id
       WHERE om.org_id = $1 ORDER BY u.is_ai, u.name`, [orgId])).map((u) => withAvatar(u) as unknown as OrgUser);
   }
 
@@ -217,6 +221,31 @@ export class Services {
     if (ORG_RANK[role] < ORG_RANK[min]) throw forbidden(min === "admin" || min === "owner" ? "Réservé aux administrateurs de l'organisation" : "Accès réservé aux membres de l'organisation");
     return role;
   }
+  // ================================================================ droits cochés dans les profils
+  async permissionsOf(userId: string, orgId: string): Promise<Permission[]> {
+    const r = await this.db.one<{ role: BaseRole; permission_overrides: Record<string, boolean>; permissions: string[] | null }>(
+      "SELECT om.role, om.permission_overrides, p.permissions FROM org_members om LEFT JOIN access_profiles p ON p.id = om.profile_id WHERE om.org_id = $1 AND om.user_id = $2", [orgId, userId]);
+    return r ? effectivePermissions(r.role, r.permissions, r.permission_overrides) : [];
+  }
+  /** Le profil s'ajoute au rôle sur le projet : il faut les deux. Les coéquipiers IA restent gouvernés par leur seul rôle. */
+  async requirePerm(actorId: string, orgId: string, perm: Permission) {
+    if ((await this.userOrNull(actorId))?.is_ai) return;
+    if (!(await this.permissionsOf(actorId, orgId)).includes(perm)) throw forbidden(`Votre profil ne vous autorise pas à : ${permissionLabel(perm).toLowerCase()}`);
+  }
+  async projectPerm(actorId: string, projectId: string, perm: Permission) {
+    await this.requirePerm(actorId, await this.orgOfProject(projectId), perm);
+  }
+  private async insertSystemProfiles(q: Queryable, orgId: string) {
+    for (const p of SYSTEM_PROFILES) {
+      await q.query("INSERT INTO access_profiles (id, org_id, name, description, base_role, permissions, is_system) VALUES ($1,$2,$3,$4,$5,$6,TRUE) ON CONFLICT (id) DO NOTHING", [systemProfileId(orgId, p.role), orgId, p.name, p.description, p.role, JSON.stringify(p.permissions)]);
+    }
+  }
+  /** Organisations créées avant les profils : chacun reçoit le profil correspondant à son rôle. */
+  async backfillProfiles() {
+    for (const o of await this.db.query<{ id: string }>("SELECT o.id FROM organizations o WHERE NOT EXISTS (SELECT 1 FROM access_profiles p WHERE p.org_id = o.id AND p.is_system)")) await this.insertSystemProfiles(this.db, o.id);
+    await this.db.query("UPDATE org_members SET profile_id = 'prf_' || role || '_' || org_id WHERE profile_id IS NULL");
+  }
+
   async createOrg(userId: string, input: { name: string; domains?: string[] }) {
     const name = input.name?.trim();
     if (!name) throw badRequest("Le nom de l'organisation est obligatoire");
@@ -226,23 +255,32 @@ export class Services {
       await q.query("INSERT INTO organizations (id, name, slug, domains) VALUES ($1,$2,$3,$4)", [id, name, slug, JSON.stringify(input.domains ?? [])]);
       const root = uid("unt");
       await q.query("INSERT INTO org_units (id, org_id, name, kind, manager_id) VALUES ($1,$2,$3,'Organisation',$4)", [root, id, name, userId]);
-      await q.query("INSERT INTO org_members (org_id, user_id, role, unit_id) VALUES ($1,$2,'owner',$3)", [id, userId, root]);
+      await this.insertSystemProfiles(q, id);
+      await q.query("INSERT INTO org_members (org_id, user_id, role, unit_id, profile_id) VALUES ($1,$2,'owner',$3,$4)", [id, userId, root, systemProfileId(id, "owner")]);
     });
     await this.log(userId, "org.created", { orgId: id, data: { name } });
     return (await this.orgsOf(userId)).find((o) => o.id === id)!;
   }
   async updateOrg(actorId: string, orgId: string, patch: { name?: string; domains?: string[] }) {
-    await this.requireOrg(actorId, orgId, "admin");
+    await this.requirePerm(actorId, orgId, "org.settings");
     if (patch.name !== undefined) await this.db.query("UPDATE organizations SET name = $1 WHERE id = $2", [patch.name.trim(), orgId]);
     if (patch.domains !== undefined) await this.db.query("UPDATE organizations SET domains = $1 WHERE id = $2", [JSON.stringify(patch.domains), orgId]);
     this.bus.emit({ type: "org.changed", actorId, orgId });
   }
   async setOrgMember(actorId: string, orgId: string, userId: string, role: OrgRole | null) {
-    const mine = await this.requireOrg(actorId, orgId, "admin");
+    const mine = await this.requireOrg(actorId, orgId);
+    await this.requirePerm(actorId, orgId, "org.members");
     await this.user(userId);
     const current = await this.orgRole(userId, orgId);
     if (role === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut nommer un propriétaire");
     if (current === "owner" && mine !== "owner") throw forbidden("Seul un propriétaire peut modifier ou retirer un propriétaire");
+    if (mine !== "owner" && ((role && ORG_RANK[role] > ORG_RANK[mine]) || (current && ORG_RANK[current] > ORG_RANK[mine]))) throw forbidden("Vous ne pouvez pas agir au-delà de votre propre niveau d'accès");
+    if (mine !== "owner" && role) {
+      // Un rôle attribue le profil système correspondant : même règle que pour les profils
+      const profile = await this.db.one<{ permissions: string[] }>("SELECT permissions FROM access_profiles WHERE id = $1", [systemProfileId(orgId, role)]);
+      const have = new Set<string>(await this.permissionsOf(actorId, orgId));
+      if (effectivePermissions(role, profile?.permissions ?? null, {}).some((p) => !have.has(p))) throw forbidden("Vous ne pouvez pas accorder un droit que vous ne possédez pas");
+    }
     if (current === "owner" && role !== "owner") {
       const owners = await this.db.one<{ n: number }>("SELECT count(*)::int AS n FROM org_members WHERE org_id = $1 AND role = 'owner'", [orgId]);
       if ((owners?.n ?? 0) <= 1) throw badRequest("Impossible de retirer le dernier propriétaire de l'organisation");
@@ -254,8 +292,8 @@ export class Services {
         await q.query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", [orgId, userId]);
       });
     } else {
-      await this.db.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1,$2,$3)
-        ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`, [orgId, userId, role]);
+      await this.db.query(`INSERT INTO org_members (org_id, user_id, role, profile_id) VALUES ($1,$2,$3,$4)
+        ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, profile_id = EXCLUDED.profile_id`, [orgId, userId, role, systemProfileId(orgId, role)]);
     }
     await this.log(actorId, "org.member", { orgId, data: { userId, role } });
     this.bus.emit({ type: "org.changed", actorId, orgId });
@@ -281,7 +319,7 @@ export class Services {
     return u;
   }
   async createUnit(actorId: string, orgId: string, input: { name: string; kind?: string; parent_id?: string | null; manager_id?: string | null }) {
-    await this.requireOrg(actorId, orgId, "admin");
+    await this.requirePerm(actorId, orgId, "org.structure");
     if (!input.name?.trim()) throw badRequest("Le nom de l'entité est obligatoire");
     if (input.parent_id) { const p = await this.unitRow(input.parent_id); if (p.org_id !== orgId) throw badRequest("Entité parente invalide"); }
     if (input.manager_id && !(await this.orgRole(input.manager_id, orgId))) throw badRequest("Le responsable doit être membre de l'organisation");
@@ -295,7 +333,7 @@ export class Services {
   }
   async updateUnit(actorId: string, unitId: string, patch: { name?: string; kind?: string; parent_id?: string | null; manager_id?: string | null }) {
     const u = await this.unitRow(unitId);
-    await this.requireOrg(actorId, u.org_id, "admin");
+    await this.requirePerm(actorId, u.org_id, "org.structure");
     if (patch.parent_id !== undefined && patch.parent_id !== u.parent_id) {
       if (patch.parent_id === null) {
         const roots = await this.db.one<{ n: number }>("SELECT count(*)::int AS n FROM org_units WHERE org_id = $1 AND parent_id IS NULL", [u.org_id]);
@@ -317,7 +355,7 @@ export class Services {
   }
   async deleteUnit(actorId: string, unitId: string) {
     const u = await this.unitRow(unitId);
-    await this.requireOrg(actorId, u.org_id, "admin");
+    await this.requirePerm(actorId, u.org_id, "org.structure");
     const c = await this.db.one<{ kids: number; teams: number; people: number }>(`SELECT
       (SELECT count(*)::int FROM org_units WHERE parent_id = $1) AS kids,
       (SELECT count(*)::int FROM teams WHERE unit_id = $1) AS teams,
@@ -329,7 +367,7 @@ export class Services {
     this.bus.emit({ type: "org.changed", actorId, orgId: u.org_id });
   }
   async setMemberUnit(actorId: string, orgId: string, userId: string, unitId: string | null) {
-    await this.requireOrg(actorId, orgId, "admin");
+    await this.requirePerm(actorId, orgId, "org.structure");
     if (unitId && (await this.unitRow(unitId)).org_id !== orgId) throw badRequest("Entité invalide");
     await this.db.query("UPDATE org_members SET unit_id = $1 WHERE org_id = $2 AND user_id = $3", [unitId, orgId, userId]);
     this.bus.emit({ type: "org.changed", actorId, orgId });
@@ -358,6 +396,7 @@ export class Services {
   private async requireTeamManager(actorId: string, teamId: string) {
     const t = await this.teamRow(teamId);
     const org = await this.requireOrg(actorId, t.org_id);
+    await this.requirePerm(actorId, t.org_id, "teams.manage");
     if (org !== "owner" && org !== "admin" && (await this.teamRole(actorId, teamId)) !== "lead") throw forbidden("Réservé aux responsables de l'équipe");
     return t;
   }
@@ -374,6 +413,7 @@ export class Services {
   }
   async createTeam(actorId: string, orgId: string, input: { name: string; description?: string; visibility?: TeamVisibility; unit_id?: string | null; color?: string }) {
     const role = await this.requireOrg(actorId, orgId, "member");
+    await this.requirePerm(actorId, orgId, "teams.create");
     if (!input.name?.trim()) throw badRequest("Le nom de l'équipe est obligatoire");
     if (input.unit_id && (await this.unitRow(input.unit_id)).org_id !== orgId) throw badRequest("Entité invalide");
     void role;
@@ -512,6 +552,7 @@ export class Services {
   }
   async createProject(actorId: string, orgId: string, input: { name: string; description?: string; color?: string; icon?: string; due_on?: string | null; sections?: string[]; team_id?: string | null; key?: string; access?: "team" | "private" }) {
     const orgRole = await this.requireOrg(actorId, orgId, "member");
+    await this.requirePerm(actorId, orgId, "projects.create");
     const name = input.name?.trim();
     if (!name) throw badRequest("Le nom du projet est obligatoire");
     assertDates(input.due_on);
@@ -542,6 +583,8 @@ export class Services {
     if (patch.archived !== undefined && role !== "admin") throw forbidden("Seuls les administrateurs du projet peuvent l'archiver ou le restaurer");
     assertDates(patch.due_on);
     const p = await this.projectRow(projectId);
+    if (patch.archived !== undefined) await this.requirePerm(actorId, p.org_id, "projects.archive");
+    if (Object.keys(patch).some((k) => k !== "archived")) await this.requirePerm(actorId, p.org_id, "projects.edit");
     if (patch.team_id) { const t = await this.teamRow(patch.team_id); if (t.org_id !== p.org_id) throw badRequest("Équipe invalide"); }
     const allowed = ["name", "description", "color", "icon", "status", "due_on", "archived", "team_id", "access"] as const;
     const sets: string[] = []; const vals: unknown[] = [];
@@ -559,6 +602,7 @@ export class Services {
   }
   async setMember(actorId: string, projectId: string, userId: string, role: Role | null) {
     await this.require(actorId, projectId, "admin");
+    await this.projectPerm(actorId, projectId, "projects.members");
     const p = await this.projectRow(projectId);
     await this.user(userId);
     if (role && !(await this.orgRole(userId, p.org_id))) throw badRequest("La personne doit d'abord être membre de l'organisation");
@@ -570,6 +614,7 @@ export class Services {
   }
   async deleteProject(actorId: string, projectId: string, confirm: string) {
     await this.require(actorId, projectId, "admin");
+    await this.projectPerm(actorId, projectId, "projects.delete");
     const p = await this.projectRow(projectId);
     if (confirm.trim() !== p.name) throw badRequest("Saisissez le nom exact du projet pour confirmer la suppression");
     const members = (await this.readableUsers(projectId)).map((u) => u);
@@ -595,6 +640,7 @@ export class Services {
   // ================================================================ sections
   async createSection(actorId: string, projectId: string, name: string) {
     await this.require(actorId, projectId, "editor");
+    await this.projectPerm(actorId, projectId, "sections.manage");
     const max = (await this.db.one<{ m: number | null }>("SELECT max(position) AS m FROM sections WHERE project_id = $1", [projectId]))?.m ?? 0;
     const id = uid("sec");
     await this.db.query("INSERT INTO sections (id, project_id, name, position) VALUES ($1,$2,$3,$4)", [id, projectId, name.trim() || "Nouvelle section", Number(max) + 1024]);
@@ -609,6 +655,7 @@ export class Services {
   async updateSection(actorId: string, sectionId: string, patch: { name?: string; position?: number }) {
     const s = await this.sectionRow(sectionId);
     await this.require(actorId, s.project_id, "editor");
+    await this.projectPerm(actorId, s.project_id, "sections.manage");
     if (patch.name !== undefined) await this.db.query("UPDATE sections SET name = $1 WHERE id = $2", [patch.name, sectionId]);
     if (patch.position !== undefined) await this.db.query("UPDATE sections SET position = $1 WHERE id = $2", [patch.position, sectionId]);
     this.bus.emit({ type: "project.changed", actorId, projectId: s.project_id });
@@ -617,6 +664,7 @@ export class Services {
   async moveSection(actorId: string, sectionId: string, direction: "left" | "right") {
     const s = await this.sectionRow(sectionId);
     await this.require(actorId, s.project_id, "editor");
+    await this.projectPerm(actorId, s.project_id, "sections.manage");
     const list = (await this.db.query<Section>("SELECT * FROM sections WHERE project_id = $1 ORDER BY position", [s.project_id])).map((x) => ({ ...x, position: Number(x.position) }));
     const i = list.findIndex((x) => x.id === sectionId);
     const j = direction === "left" ? i - 1 : i + 1;
@@ -632,6 +680,7 @@ export class Services {
   async deleteSection(actorId: string, sectionId: string) {
     const s = await this.sectionRow(sectionId);
     await this.require(actorId, s.project_id, "admin");
+    await this.projectPerm(actorId, s.project_id, "sections.manage");
     const fallback = await this.db.one<{ id: string }>("SELECT id FROM sections WHERE project_id = $1 AND id <> $2 ORDER BY position LIMIT 1", [s.project_id, sectionId]);
     if (!fallback) throw badRequest("Un projet doit garder au moins une section");
     await this.db.tx(async (q) => {
@@ -720,6 +769,7 @@ export class Services {
     const title = input.title?.trim();
     if (!title) throw badRequest("Le titre est obligatoire");
     await this.require(actorId, input.project_id, "editor");
+    await this.projectPerm(actorId, input.project_id, "tasks.create");
     assertDates(input.start_on, input.due_on);
     let sectionId = input.section_id ?? null;
     let parentId = input.parent_id ?? null;
@@ -734,6 +784,7 @@ export class Services {
       if (!s || s.project_id !== input.project_id) throw badRequest("Section invalide");
     }
     if (input.assignee_id) await this.checkAssignee(input.project_id, input.assignee_id);
+    if (input.assignee_id && !opts.silent) await this.assertCanDelegate(actorId, input.project_id, [input.assignee_id]);
     if (input.start_on && input.due_on && input.start_on > input.due_on) throw badRequest("La date de début doit précéder l'échéance");
     const id = uid("tsk");
     await this.db.tx(async (q) => {
@@ -756,9 +807,15 @@ export class Services {
     if (!(await this.projectRole(userId, projectId))) throw badRequest(`${u.name} n'a pas accès à ce projet`);
   }
 
+  /** Assigner ou mentionner un coéquipier IA lance un travail : c'est une délégation, soumise au droit correspondant. */
+  private async assertCanDelegate(actorId: string, projectId: string, targets: string[]) {
+    for (const id of targets) if ((await this.user(id)).is_ai) return this.projectPerm(actorId, projectId, "ai.delegate");
+  }
+
   async updateTask(actorId: string, ref: string, patch: TaskPatch): Promise<Task> {
     const before = await this.taskRow(await this.resolveTaskId(actorId, ref));
     await this.require(actorId, before.project_id, "editor");
+    await this.projectPerm(actorId, before.project_id, "tasks.edit");
     assertDates(patch.start_on, patch.due_on);
     const start = patch.start_on !== undefined ? patch.start_on : before.start_on;
     const due = patch.due_on !== undefined ? patch.due_on : before.due_on;
@@ -770,6 +827,7 @@ export class Services {
       if (v === undefined) continue;
       if (k === "title" && !String(v).trim()) throw badRequest("Le titre ne peut pas être vide");
       if (k === "assignee_id" && v) await this.checkAssignee(before.project_id, String(v));
+      if (k === "assignee_id" && v && v !== before.assignee_id) await this.assertCanDelegate(actorId, before.project_id, [String(v)]);
       if (k === "section_id" && v === null && !before.parent_id) throw badRequest("Une tâche doit rester dans une section");
       if (k === "section_id" && v) {
         const s = await this.db.one<Section>("SELECT * FROM sections WHERE id = $1", [v]);
@@ -832,6 +890,7 @@ export class Services {
     const t = await this.taskRow(await this.resolveTaskId(actorId, ref));
     if (t.parent_id) throw badRequest("Une sous-tâche se déplace avec sa tâche parente");
     this.assertCanRemoveTask(actorId, t, await this.require(actorId, t.project_id, "editor"));
+    await this.projectPerm(actorId, t.project_id, "tasks.move");
     await this.require(actorId, projectId, "editor");
     if (t.project_id === projectId) return t;
     const [src, dst] = [await this.projectRow(t.project_id), await this.projectRow(projectId)];
@@ -863,6 +922,7 @@ export class Services {
   async deleteTask(actorId: string, ref: string) {
     const task = await this.taskRow(await this.resolveTaskId(actorId, ref));
     this.assertCanRemoveTask(actorId, task, await this.require(actorId, task.project_id, "editor"));
+    await this.projectPerm(actorId, task.project_id, "tasks.delete");
     await this.db.query("DELETE FROM tasks WHERE id = $1", [task.id]);
     await this.log(actorId, "task.deleted", { projectId: task.project_id, data: { title: task.title, key: task.key } });
     this.bus.emit({ type: "task.deleted", actorId, projectId: task.project_id, taskId: task.id });
@@ -872,11 +932,9 @@ export class Services {
   async addComment(actorId: string, ref: string, body: string, aiRunId: string | null = null): Promise<Comment> {
     const task = await this.taskRow(await this.resolveTaskId(actorId, ref));
     await this.require(actorId, task.project_id, "commenter");
+    await this.projectPerm(actorId, task.project_id, "tasks.comment");
     const text = body.trim();
     if (!text) throw badRequest("Le commentaire est vide");
-    const id = uid("cmt");
-    await this.db.query("INSERT INTO comments (id, task_id, author_id, body, ai_run_id) VALUES ($1,$2,$3,$4,$5)", [id, task.id, actorId, text, aiRunId]);
-    await this.log(actorId, "comment.created", { projectId: task.project_id, taskId: task.id, data: { excerpt: text.slice(0, 140) } });
     const orgId = await this.orgOfProject(task.project_id);
     // Mentions @Prénom, limitées aux membres de l'organisation qui ont accès au projet
     const mentions: string[] = [];
@@ -884,6 +942,10 @@ export class Services {
       if (u.id === actorId || !mentionPattern(u.name).test(text)) continue;
       if (await this.projectRole(u.id, task.project_id)) mentions.push(u.id);
     }
+    await this.assertCanDelegate(actorId, task.project_id, mentions);
+    const id = uid("cmt");
+    await this.db.query("INSERT INTO comments (id, task_id, author_id, body, ai_run_id) VALUES ($1,$2,$3,$4,$5)", [id, task.id, actorId, text, aiRunId]);
+    await this.log(actorId, "comment.created", { projectId: task.project_id, taskId: task.id, data: { excerpt: text.slice(0, 140) } });
     const author = await this.user(actorId);
     const notified = new Set<string>();
     for (const m of mentions) {

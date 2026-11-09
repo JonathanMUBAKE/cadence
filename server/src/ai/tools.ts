@@ -1,6 +1,6 @@
 import type { Services, Task, Priority } from "../services.js";
 import { uid } from "../db.js";
-import { badRequest } from "../services.js";
+import { badRequest, forbidden } from "../services.js";
 import { Attachments } from "../attachments.js";
 
 export interface ToolDef {
@@ -100,7 +100,11 @@ export const WRITE_TOOL_NAMES = new Set(WRITE_TOOLS.map((t) => t.name));
 // Exécution : toujours au nom d'un acteur, dans une organisation donnée
 // ---------------------------------------------------------------------------
 type Input = Record<string, unknown>;
-export interface ToolCtx { actorId: string; orgId: string }
+export interface ToolCtx {
+  actorId: string; orgId: string;
+  /** Coéquipier IA : il ne sort pas de son projet, sauf vers ce que la personne à l'origine de la demande peut voir elle-même. */
+  scope?: { requesterId: string | null; projectId: string };
+}
 const str = (v: unknown) => (v === undefined || v === null || v === "" ? undefined : String(v));
 
 export class ToolRunner {
@@ -135,6 +139,29 @@ export class ToolRunner {
   /** Une clé comme APP-12 se lit dans l'organisation où travaille l'agent. */
   private taskId(ctx: ToolCtx, ref: unknown) { return this.svc.resolveTaskId(ctx.actorId, String(ref), ctx.orgId); }
 
+  private async inScope(ctx: ToolCtx, projectId: string) {
+    if (!ctx.scope || projectId === ctx.scope.projectId) return true;
+    return !!ctx.scope.requesterId && !!(await this.svc.projectRole(ctx.scope.requesterId, projectId));
+  }
+  private async assertScope(ctx: ToolCtx, projectId: string) {
+    if (!(await this.inScope(ctx, projectId))) throw forbidden("Ce projet est hors de portée de la personne à l'origine de la demande");
+  }
+  private async scopedProject(ctx: ToolCtx, ref: unknown) {
+    const id = await this.resolveProject(ctx, ref);
+    await this.assertScope(ctx, id);
+    return id;
+  }
+  private async scopedTask(ctx: ToolCtx, ref: unknown) {
+    const t = await this.svc.getTask(ctx.actorId, await this.taskId(ctx, ref));
+    await this.assertScope(ctx, t.project_id);
+    return t;
+  }
+  private async projectsInScope(ctx: ToolCtx, ids: string[]) {
+    const allowed = new Set<string>();
+    for (const id of new Set(ids)) if (await this.inScope(ctx, id)) allowed.add(id);
+    return allowed;
+  }
+
   async brief(t: Task) {
     const u = t.assignee_id ? await this.svc.userOrNull(t.assignee_id) : null;
     const sec = t.section_id ? (await this.svc.db.one<{ name: string }>("SELECT name FROM sections WHERE id = $1", [t.section_id]))?.name : null;
@@ -148,10 +175,13 @@ export class ToolRunner {
   async execute(ctx: ToolCtx, name: string, input: Input): Promise<unknown> {
     const s = this.svc; const actorId = ctx.actorId;
     switch (name) {
-      case "list_projects":
-        return (await s.listProjects(actorId, ctx.orgId)).map((p) => ({ project_id: p.id, key: p.key, name: p.name, team: p.team_name, status: p.status, due_on: p.due_on, tasks: p.task_count, done: p.done_count, overdue: p.overdue_count }));
+      case "list_projects": {
+        const projects = await s.listProjects(actorId, ctx.orgId);
+        const allowed = await this.projectsInScope(ctx, projects.map((p) => p.id));
+        return projects.filter((p) => allowed.has(p.id)).map((p) => ({ project_id: p.id, key: p.key, name: p.name, team: p.team_name, status: p.status, due_on: p.due_on, tasks: p.task_count, done: p.done_count, overdue: p.overdue_count }));
+      }
       case "get_project": {
-        const p = await s.getProject(actorId, await this.resolveProject(ctx, input.project_id));
+        const p = await s.getProject(actorId, await this.scopedProject(ctx, input.project_id));
         const st = await s.projectStats(actorId, p.id);
         const members = [];
         for (const m of p.members) { const u = await s.user(m.user_id); members.push({ id: u.id, name: u.name, title: u.title, role: m.role, is_ai: u.is_ai }); }
@@ -162,19 +192,22 @@ export class ToolRunner {
         };
       }
       case "search_tasks": {
-        const tasks = await s.listTasks(actorId, {
+        const wanted = Number(input.limit) || 25;
+        const found = await s.listTasks(actorId, {
           org_id: ctx.orgId,
-          project_id: input.project_id ? await this.resolveProject(ctx, input.project_id) : undefined,
+          project_id: input.project_id ? await this.scopedProject(ctx, input.project_id) : undefined,
           assignee_id: input.unassigned ? null : await this.resolveUser(ctx.orgId, input.assignee),
           completed: typeof input.completed === "boolean" ? input.completed : undefined, overdue: input.overdue === true,
           due_before: str(input.due_before), due_after: str(input.due_after), priority: str(input.priority) as Priority | undefined,
-          text: str(input.text), include_subtasks: true, limit: Number(input.limit) || 25,
+          text: str(input.text), include_subtasks: true, limit: ctx.scope ? 1000 : wanted, // Le filtre vient après : la limite ne doit pas être consommée par des tâches masquées
         });
+        const allowed = await this.projectsInScope(ctx, found.map((t) => t.project_id));
+        const tasks = found.filter((t) => allowed.has(t.project_id)).slice(0, wanted);
         const out = []; for (const t of tasks) out.push(await this.brief(t));
         return { count: tasks.length, tasks: out };
       }
       case "get_task": {
-        const t = await s.getTask(actorId, await this.taskId(ctx, input.task));
+        const t = await this.scopedTask(ctx, input.task);
         const subtasks = []; for (const x of t.subtasks) subtasks.push(await this.brief(x));
         const comments = [];
         for (const c of t.comments.slice(-8)) comments.push({ author: (await s.user(c.author_id)).name, body: c.body.slice(0, 500), at: c.created_at.slice(0, 16) });
@@ -182,9 +215,10 @@ export class ToolRunner {
         return { ...(await this.brief(t)), description: t.description, project: t.project.name, parent: t.parent ? `${t.parent.key} ${t.parent.title}` : null, subtasks, comments, attachments };
       }
       case "read_attachment":
+        await this.assertScope(ctx, await this.attachments.projectOf(String(input.attachment_id)));
         return this.attachments.readForAgent(actorId, String(input.attachment_id), Number(input.offset) || 0);
       case "create_task": {
-        const projectId = await this.resolveProject(ctx, input.project_id);
+        const projectId = await this.scopedProject(ctx, input.project_id);
         const t = await s.createTask(actorId, {
           project_id: projectId, title: String(input.title ?? ""), description: str(input.description),
           section_id: await this.resolveSection(projectId, input.section), parent_id: str(input.parent) ? await this.taskId(ctx, input.parent) : undefined,
@@ -193,7 +227,7 @@ export class ToolRunner {
         return { created: await this.brief(t) };
       }
       case "update_task": {
-        const cur = await s.getTask(actorId, await this.taskId(ctx, input.task));
+        const cur = await this.scopedTask(ctx, input.task);
         const t = await s.updateTask(actorId, cur.id, {
           title: str(input.title), description: str(input.description),
           section_id: await this.resolveSection(cur.project_id, input.section),
@@ -204,14 +238,14 @@ export class ToolRunner {
         return { updated: await this.brief(t) };
       }
       case "add_comment": {
-        const c = await s.addComment(actorId, await this.taskId(ctx, input.task), String(input.body ?? ""), str(input.__run_id) ?? null);
+        const c = await s.addComment(actorId, (await this.scopedTask(ctx, input.task)).id, String(input.body ?? ""), str(input.__run_id) ?? null);
         return { commented: true, comment_id: c.id };
       }
       case "remember": {
         const type = input.object_type === "task" ? "task" : "project";
         let objectId: string; let projectId: string;
-        if (type === "task") { const t = await s.getTask(actorId, await this.taskId(ctx, input.object_id)); objectId = t.id; projectId = t.project_id; }
-        else { projectId = await this.resolveProject(ctx, input.object_id); objectId = projectId; await s.require(actorId, projectId); }
+        if (type === "task") { const t = await this.scopedTask(ctx, input.object_id); objectId = t.id; projectId = t.project_id; }
+        else { projectId = await this.scopedProject(ctx, input.object_id); objectId = projectId; await s.require(actorId, projectId); }
         await s.db.query("INSERT INTO ai_memories (id, agent_id, object_type, object_id, project_id, content) VALUES ($1,$2,$3,$4,$5,$6)",
           [uid("mem"), actorId, type, objectId, projectId, String(input.content ?? "")]);
         return { remembered: true };
@@ -224,7 +258,7 @@ export class ToolRunner {
   /** Phrase lisible pour la carte de validation. */
   async describe(ctx: ToolCtx, name: string, input: Input): Promise<string> {
     const s = this.svc;
-    const taskTitle = async (ref: unknown) => { try { const t = await s.getTask(ctx.actorId, await this.taskId(ctx, ref)); return `${t.key} « ${t.title} »`; } catch { return String(ref); } };
+    const taskTitle = async (ref: unknown) => { try { const t = await this.scopedTask(ctx, ref); return `${t.key} « ${t.title} »`; } catch { return String(ref); } };
     const who = async (ref: unknown) => { try { const id = await this.resolveUser(ctx.orgId, ref); return id ? (await s.user(id)).name : "personne"; } catch { return String(ref); } };
     switch (name) {
       case "add_comment": return `Commenter ${await taskTitle(input.task)}`;
