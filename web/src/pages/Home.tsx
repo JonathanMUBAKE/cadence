@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { motion } from "motion/react";
-import { ArrowRight, Sparkles, Wand2 } from "lucide-react";
+import { Archive, ArrowRight, Sparkles, Wand2 } from "lucide-react";
 import { Avatar, Button, Empty, ProgressRing, ProjectIcon, cn } from "@/components/ui";
 import { ApprovalCard, RUN_STATUS, isActive } from "@/components/ai";
 import { TaskRow } from "@/components/TaskRow";
-import { useApprovals, useMe, useMyTasks, useProjects, useRuns, useUpdateTask, useUserMap } from "@/lib/hooks";
+import { useApprovals, useArchivedProjects, useMe, useMyTasks, useProjects, useRuns, useUpdateTask, useUserMap } from "@/lib/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api } from "@/lib/api";
 import { useShell } from "@/lib/shell";
 import { STATUS, ago, firstName, greeting, isoIn, longDate, todayIso } from "@/lib/format";
 
@@ -19,6 +22,9 @@ export function HomePage() {
   const shell = useShell();
   const update = useUpdateTask();
   const [tab, setTab] = useState<"upcoming" | "overdue" | "done">("upcoming");
+  const [showArchived, setShowArchived] = useState(false);
+  const { data: archived } = useArchivedProjects(showArchived);
+  const qc = useQueryClient();
   const projectMap = useMemo(() => new Map(projects?.map((p) => [p.id, p])), [projects]);
 
   const open = tasks?.filter((t) => !t.completed) ?? [];
@@ -61,7 +67,25 @@ export function HomePage() {
           </section>
 
           <section>
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-[14px] font-semibold">Projets</h2><Button size="sm" variant="ghost" onClick={() => shell.setNewProject(true)}>Nouveau projet</Button></div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-[14px] font-semibold">Projets</h2>
+              <span className="flex gap-1">
+                <Button size="sm" variant="ghost" icon={<Archive className="size-3.5" />} onClick={() => setShowArchived((v) => !v)}>{showArchived ? "Masquer les archivés" : "Archivés"}</Button>
+                <Button size="sm" variant="ghost" onClick={() => shell.setNewProject(true)}>Nouveau projet</Button>
+              </span>
+            </div>
+            {showArchived && (
+              <div className="mb-3 overflow-hidden rounded-2xl border border-dashed border-line-strong">
+                {!archived?.length && <p className="px-4 py-3 text-[13px] text-muted">Aucun projet archivé.</p>}
+                {archived?.map((p) => (
+                  <div key={p.id} className="flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0">
+                    <ProjectIcon icon={p.icon} color={p.color} size={22} />
+                    <Link to={`/projects/${p.id}`} className="min-w-0 flex-1 truncate text-[13.5px] text-muted hover:text-fg">{p.name}</Link>
+                    {(p.role === "editor" || p.role === "admin") && <Button size="sm" onClick={() => api.patch(`/api/projects/${p.id}`, { archived: false }).then(() => { qc.invalidateQueries({ queryKey: ["projects"] }); toast.success("Projet restauré"); })}>Restaurer</Button>}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {projects?.map((p) => {
                 const pct = p.task_count ? p.done_count / p.task_count : 0;

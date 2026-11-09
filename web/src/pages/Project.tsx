@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { NavLink, useParams } from "react-router";
+import { NavLink, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BarChart3, CalendarDays, ChartNoAxesGantt, Check, ChevronDown, LayoutList, Plus, Sparkles, SquareKanban, UserPlus, Wand2, Zap } from "lucide-react";
-import { Avatar, AvatarStack, Button, Menu, MenuContent, MenuItem, MenuTrigger, Popover, PopoverContent, PopoverTrigger, ProjectIcon, Spinner, cn } from "@/components/ui";
+import { Archive, BarChart3, CalendarDays, ChartNoAxesGantt, Check, ChevronDown, Ellipsis, LayoutList, Plus, Sparkles, SquareKanban, Trash2, UserPlus, Wand2, Zap } from "lucide-react";
+import { Avatar, AvatarStack, Button, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Popover, PopoverContent, PopoverTrigger, ProjectIcon, Spinner, cn } from "@/components/ui";
 import { DueChip, DuePicker } from "@/components/pickers";
 import { StatusUpdateDialog } from "@/components/dialogs";
 import { isActive } from "@/components/ai";
@@ -53,6 +53,12 @@ export function ProjectPage() {
 
   return (
     <div className="flex min-h-full flex-col">
+      {project.archived && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-line bg-warning-soft px-4 py-2.5 text-[13px] text-warning sm:px-8">
+          <Archive className="size-4" /><span className="flex-1">Ce projet est archivé : il n'apparaît plus dans la barre latérale ni dans les recherches.</span>
+          {canEdit && <Button size="sm" onClick={() => patch({ archived: false }).then(() => toast.success("Projet restauré"))}>Restaurer</Button>}
+        </div>
+      )}
       <header className="border-b border-line px-4 pt-5 sm:px-8 sm:pt-7">
         <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
           <ProjectIcon icon={project.icon} color={project.color} size={40} />
@@ -77,6 +83,7 @@ export function ProjectPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Members project={project} />
+            <ProjectMenu project={project} />
             <Button variant="ai" icon={<Sparkles className="size-3.5" />} onClick={() => setStatusOpen(true)}>Point d'avancement</Button>
             {canEdit && <Button variant="ai" icon={<Wand2 className="size-3.5" />} onClick={() => shell.openQuickAdd(project.id)} className="hidden sm:inline-flex">Notes → tâches</Button>}
             {canEdit && <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={addTask}>Tâche</Button>}
@@ -101,6 +108,38 @@ export function ProjectPage() {
       </div>
       <StatusUpdateDialog projectId={project.id} open={statusOpen} onOpenChange={setStatusOpen} />
     </div>
+  );
+}
+
+function ProjectMenu({ project }: { project: ProjectDetail }) {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const [deleting, setDeleting] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const canEdit = project.role === "editor" || project.role === "admin";
+  if (!canEdit) return null;
+  const refresh = () => { qc.invalidateQueries({ queryKey: ["projects"] }); qc.invalidateQueries({ queryKey: ["project", project.id] }); };
+  const archive = () => api.patch(`/api/projects/${project.id}`, { archived: !project.archived })
+    .then(() => { refresh(); toast.success(project.archived ? "Projet restauré" : "Projet archivé"); if (!project.archived) nav("/"); }, (e) => toast.error(e.message));
+  const remove = () => api.del(`/api/projects/${project.id}`, { confirm })
+    .then(() => { refresh(); setDeleting(false); toast.success("Projet supprimé"); nav("/"); }, (e) => toast.error(e.message));
+  return (
+    <>
+      <Menu>
+        <MenuTrigger asChild><IconButton label="Actions du projet"><Ellipsis className="size-4" /></IconButton></MenuTrigger>
+        <MenuContent align="end">
+          <MenuItem icon={<Archive className="size-3.5" />} onSelect={archive}>{project.archived ? "Restaurer le projet" : "Archiver le projet"}</MenuItem>
+          {project.role === "admin" && <><MenuSeparator /><MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => { setConfirm(""); setDeleting(true); }}>Supprimer le projet</MenuItem></>}
+        </MenuContent>
+      </Menu>
+      <Dialog open={deleting} onOpenChange={setDeleting} title="Supprimer définitivement le projet ?" width={480}
+        description="Toutes ses tâches, sous-tâches, commentaires et règles IA seront supprimés. Pour garder l'historique, archivez-le plutôt."
+        footer={<><Button onClick={() => setDeleting(false)}>Annuler</Button><Button variant="danger" disabled={confirm.trim() !== project.name} onClick={remove}>Supprimer le projet</Button></>}>
+        <label className="block text-[13px] text-muted">Saisissez <b className="font-semibold text-fg">{project.name}</b> pour confirmer
+          <input autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} className="mt-2 h-10 w-full rounded-lg border border-line bg-bg/60 px-3 text-[14px] text-fg outline-none focus:border-danger" />
+        </label>
+      </Dialog>
+    </>
   );
 }
 

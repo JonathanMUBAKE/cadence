@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowRight, Pencil, Plus, Trash2, Zap } from "lucide-react";
@@ -102,6 +102,7 @@ function RuleEditor({ rule, project, onClose, onSave }: { rule: Partial<AiRule>;
   const { data: agents } = useAgents();
   const members = (agents ?? []).filter((a) => project.members.some((m) => m.user_id === a.id));
   const [r, setR] = useState<Partial<AiRule>>({ agent_id: members[0]?.id, ...rule });
+  useEffect(() => { if (!r.agent_id && members[0]) setR((x) => ({ ...x, agent_id: members[0].id })); }, [members, r.agent_id]);
   const field = "w-full rounded-lg border border-line bg-bg/60 px-3 py-2 text-[13.5px] outline-none focus:border-line-strong";
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()} title={rule.id ? "Modifier la règle" : "Nouvelle règle IA"} width={580}

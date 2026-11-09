@@ -7,6 +7,7 @@ export type DomainEvent =
   | { type: "task.deleted"; actorId: string; projectId: string; taskId: string }
   | { type: "comment.created"; actorId: string; projectId: string; taskId: string; commentId: string; mentions: string[] }
   | { type: "project.changed"; actorId: string; projectId: string }
+  | { type: "project.deleted"; actorId: string; projectId: string; members: string[] }
   | { type: "notification"; userId: string }
   | { type: "ai.run"; runId: string; projectId: string | null; taskId: string | null; agentId: string; status: string }
   | { type: "ai.step"; runId: string; projectId: string | null; taskId: string | null }

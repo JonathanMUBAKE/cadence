@@ -4,12 +4,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowUpRight, CalendarDays, ChevronRight, Copy, CornerDownLeft, Ellipsis, Flag, Hash, LayoutGrid, ListChecks, Plus, Send, Sparkles,
-  Tag, Trash2, User as UserIcon, Wand2, X, History, MessageSquare,
+  Tag, Trash2, User as UserIcon, Wand2, X, History, MessageSquare, CalendarClock, CopyPlus, FolderInput, Pencil,
 } from "lucide-react";
-import { Avatar, Button, Checkbox, Chip, IconButton, Markdown, Menu, MenuContent, MenuItem, MenuTrigger, ProjectIcon, Spinner, cn } from "./ui";
+import { Avatar, Button, Checkbox, Chip, IconButton, Markdown, Menu, MenuContent, MenuItem, MenuSeparator, MenuSub, MenuTrigger, ProjectIcon, Spinner, cn } from "./ui";
 import { AssigneePicker, DueChip, DuePicker, PriorityFlag, PriorityPicker, SectionPicker } from "./pickers";
 import { AiBadge, RUN_STATUS, RunTimeline, isActive } from "./ai";
-import { useAgents, useCreateTask, useDeleteTask, useProject, useRuns, useTask, useUpdateTask, useUserMap } from "@/lib/hooks";
+import { useAgents, useCreateTask, useDeleteTask, useMe, useProject, useProjects, useRuns, useTask, useUpdateTask, useUserMap } from "@/lib/hooks";
 import { ago, dueLabel, shortDate } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { Task, TaskDetail } from "@/lib/types";
@@ -17,7 +17,13 @@ import type { Task, TaskDetail } from "@/lib/types";
 export function TaskDrawer({ taskId, onClose, onOpenTask }: { taskId: string | null; onClose: () => void; onOpenTask: (id: string) => void }) {
   useEffect(() => {
     if (!taskId) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[data-radix-popper-content-wrapper]")) onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector("[data-radix-popper-content-wrapper]")) return;
+      const el = document.activeElement as HTMLElement | null;
+      // Premier Échap : on quitte le champ en cours de saisie sans perdre le brouillon
+      if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable)) { el.blur(); return; }
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [taskId, onClose]);
@@ -43,6 +49,8 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
   const update = useUpdateTask();
   const del = useDeleteTask();
   const users = useUserMap();
+  const { data: projects } = useProjects();
+  const qc = useQueryClient();
   const canEdit = t?.role === "editor" || t?.role === "admin";
   const save = (patch: Partial<Task>) => t && update.mutate({ id: t.id, ...patch });
 
@@ -64,6 +72,24 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
             <Menu>
               <MenuTrigger asChild><IconButton label="Plus d'actions"><Ellipsis className="size-4" /></IconButton></MenuTrigger>
               <MenuContent align="end">
+                <MenuItem icon={<CopyPlus className="size-3.5" />} onSelect={async () => {
+                  try { const c = await api.post<Task>(`/api/tasks/${t.id}/duplicate`, { subtasks: true }); qc.invalidateQueries({ queryKey: ["tasks"] }); toast.success("Tâche dupliquée"); onOpenTask(c.id); }
+                  catch (e) { toast.error((e as Error).message); }
+                }}>Dupliquer avec les sous-tâches</MenuItem>
+                {!t.parent_id && (
+                  <MenuSub label="Déplacer vers un projet" icon={<FolderInput className="size-3.5" />}>
+                    {(projects ?? []).filter((p) => p.id !== t.project_id && (p.role === "editor" || p.role === "admin")).map((p) => (
+                      <MenuItem key={p.id} icon={<ProjectIcon icon={p.icon} color={p.color} size={16} />} onSelect={async () => {
+                        try {
+                          const moved = await api.post<Task>(`/api/tasks/${t.id}/move-project`, { project_id: p.id });
+                          qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task", t.id] }); qc.invalidateQueries({ queryKey: ["projects"] });
+                          toast.success(`Déplacée vers « ${p.name} »${t.assignee_id && !moved.assignee_id ? " · responsable retiré (pas membre)" : ""}`);
+                        } catch (e) { toast.error((e as Error).message); }
+                      }}>{p.name}</MenuItem>
+                    ))}
+                  </MenuSub>
+                )}
+                <MenuSeparator />
                 <MenuItem danger icon={<Trash2 className="size-3.5" />} onSelect={() => del.mutate(t.id, { onSuccess: () => { toast.success("Tâche supprimée"); onClose(); } })}>Supprimer la tâche</MenuItem>
               </MenuContent>
             </Menu>
@@ -93,6 +119,13 @@ function DrawerBody({ taskId, onClose, onOpenTask }: { taskId: string; onClose: 
                   {assignee?.is_ai && <AiBadge label="Coéquipier IA" />}
                 </button>
               </AssigneePicker>
+            </Field>
+            <Field icon={<CalendarClock className="size-3.5" />} label="Début">
+              <DuePicker value={t.start_on} onChange={(d) => save({ start_on: d })}>
+                <button disabled={!canEdit} className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-hover">
+                  {t.start_on ? <span className="tabular">{shortDate(t.start_on)}</span> : <span className="text-faint">Aucune</span>}
+                </button>
+              </DuePicker>
             </Field>
             <Field icon={<CalendarDays className="size-3.5" />} label="Échéance">
               <DuePicker value={t.due_on} onChange={(d) => save({ due_on: d })}>
@@ -277,6 +310,7 @@ function ImproveDescription({ t }: { t: TaskDetail }) {
 // ------------------------------------------------------------------ sous-tâches
 function Subtasks({ t, canEdit, memberIds, onOpenTask }: { t: TaskDetail; canEdit: boolean; memberIds: string[]; onOpenTask: (id: string) => void }) {
   const create = useCreateTask();
+  const qc = useQueryClient();
   const update = useUpdateTask();
   const users = useUserMap();
   const [v, setV] = useState("");
@@ -293,7 +327,7 @@ function Subtasks({ t, canEdit, memberIds, onOpenTask }: { t: TaskDetail; canEdi
     const chosen = suggest!.filter((s) => s.on);
     await api.post(`/api/projects/${t.project_id}/tasks/bulk`, { tasks: chosen.map((s) => ({ title: s.title, due_on: s.due_on, parent_id: t.id })) }).catch((e) => toast.error(e.message));
     setSuggest(null); toast.success(`${chosen.length} sous-tâche(s) ajoutée(s)`);
-    create.reset();
+    qc.invalidateQueries({ queryKey: ["task", t.id] }); qc.invalidateQueries({ queryKey: ["tasks"] });
   };
   return (
     <section className="mt-7">
@@ -376,22 +410,7 @@ function Conversation({ t, canComment, memberIds }: { t: TaskDetail; canComment:
       {tab === "comments" ? (
         <div className="space-y-4">
           {t.comments.length === 0 && <p className="text-[13px] text-faint">Pas encore de commentaire. Écrivez @Atlas ou @Nova pour solliciter un coéquipier IA.</p>}
-          {t.comments.map((c) => {
-            const a = users.get(c.author_id);
-            return (
-              <div key={c.id} className="flex gap-3">
-                <Avatar user={a} size={28} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-semibold">{a?.name}</span>
-                    {a?.is_ai && <AiBadge />}
-                    <span className="text-[12px] text-faint">{ago(c.created_at)}</span>
-                  </div>
-                  <div className={cn("mt-1 text-[13.5px] leading-relaxed", a?.is_ai && "rounded-xl border border-ai-line/60 bg-ai-soft/40 px-3 py-2")}><Markdown text={c.body} /></div>
-                </div>
-              </div>
-            );
-          })}
+          {t.comments.map((c) => <CommentItem key={c.id} c={c} taskId={t.id} isAdmin={t.role === "admin"} />)}
           {canComment && <Composer taskId={t.id} memberIds={memberIds} />}
         </div>
       ) : (
@@ -406,6 +425,53 @@ function Conversation({ t, canComment, memberIds }: { t: TaskDetail; canComment:
         </ol>
       )}
     </section>
+  );
+}
+
+function CommentItem({ c, taskId, isAdmin }: { c: TaskDetail["comments"][number]; taskId: string; isAdmin: boolean }) {
+  const users = useUserMap();
+  const { data: me } = useMe();
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(c.body);
+  const a = users.get(c.author_id);
+  const mine = me?.id === c.author_id;
+  const refresh = () => qc.invalidateQueries({ queryKey: ["task", taskId] });
+  const save = async () => {
+    try { await api.patch(`/api/comments/${c.id}`, { body: v }); setEditing(false); refresh(); } catch (e) { toast.error((e as Error).message); }
+  };
+  const remove = async () => {
+    try { await api.del(`/api/comments/${c.id}`); toast.success("Commentaire supprimé"); refresh(); } catch (e) { toast.error((e as Error).message); }
+  };
+  return (
+    <div className="group flex gap-3">
+      <Avatar user={a} size={28} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[13px] font-semibold">{a?.name}</span>
+          {a?.is_ai && <AiBadge />}
+          <span className="text-[12px] text-faint">{ago(c.created_at)}{c.edited_at && " · modifié"}</span>
+          {(mine || isAdmin) && !editing && (
+            <span className="ml-auto flex gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+              {mine && <IconButton size="sm" label="Modifier le commentaire" onClick={() => { setV(c.body); setEditing(true); }}><Pencil className="size-3.5" /></IconButton>}
+              <IconButton size="sm" label="Supprimer le commentaire" onClick={remove}><Trash2 className="size-3.5" /></IconButton>
+            </span>
+          )}
+        </div>
+        {editing ? (
+          <div className="mt-1">
+            <textarea autoFocus value={v} onChange={(e) => setV(e.target.value)} rows={3} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(); }}
+              className="w-full resize-y rounded-lg border border-line-strong bg-panel px-2.5 py-2 text-[13.5px] outline-none focus:border-ai-line" />
+            <div className="mt-1.5 flex justify-end gap-1.5">
+              <Button size="sm" onClick={() => setEditing(false)}>Annuler</Button>
+              <Button size="sm" variant="primary" disabled={!v.trim()} onClick={save}>Enregistrer</Button>
+            </div>
+          </div>
+        ) : (
+          <div className={cn("mt-1 text-[13.5px] leading-relaxed", a?.is_ai && "rounded-xl border border-ai-line/60 bg-ai-soft/40 px-3 py-2")}><Markdown text={c.body} /></div>
+        )}
+      </div>
+    </div>
   );
 }
 

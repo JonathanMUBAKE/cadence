@@ -167,6 +167,19 @@ export function MenuItem({ children, onSelect, icon, danger, right }: { children
   );
 }
 export const MenuSeparator = () => <DM.Separator className="my-1 h-px bg-line" />;
+export function MenuSub({ label, icon, children }: { label: ReactNode; icon?: ReactNode; children: ReactNode }) {
+  return (
+    <DM.Sub>
+      <DM.SubTrigger className="flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-[13px] text-fg outline-none data-[highlighted]:bg-hover data-[state=open]:bg-hover">
+        {icon && <span className="flex w-4 justify-center text-muted">{icon}</span>}
+        <span className="flex-1 truncate">{label}</span><span className="text-faint">›</span>
+      </DM.SubTrigger>
+      <DM.Portal>
+        <DM.SubContent sideOffset={6} collisionPadding={12} className="z-50 max-h-[320px] min-w-[220px] overflow-y-auto rounded-xl border border-line bg-raised p-1 shadow-lg">{children}</DM.SubContent>
+      </DM.Portal>
+    </DM.Sub>
+  );
+}
 export const MenuLabel = ({ children }: { children: ReactNode }) => <DM.Label className="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wider text-faint">{children}</DM.Label>;
 
 export const Popover = PO.Root;

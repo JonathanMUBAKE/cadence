@@ -10,6 +10,7 @@ import { Avatar, Checkbox, Chip, cn } from "@/components/ui";
 import { DueChip, PriorityFlag } from "@/components/pickers";
 import { SubtaskProgress } from "@/components/TaskDrawer";
 import { InlineAdd } from "./ListView";
+import { SectionMenu } from "@/components/SectionMenu";
 import { useMoveTask, useUpdateTask, useUserMap } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import type { Task, User } from "@/lib/types";
@@ -73,7 +74,8 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onStart} onDragOver={onOver} onDragEnd={onEnd} onDragCancel={() => { setDragging(null); setCols(derive()); }}>
       <div className="flex h-full gap-3 overflow-x-auto px-4 py-5 sm:px-8">
         {project.sections.map((s) => (
-          <Column key={s.id} id={s.id} name={s.name} count={cols[s.id]?.length ?? 0} done={(cols[s.id] ?? []).filter((id) => byId.get(id)?.completed).length}>
+          <Column key={s.id} id={s.id} name={s.name} count={cols[s.id]?.length ?? 0} done={(cols[s.id] ?? []).filter((id) => byId.get(id)?.completed).length}
+            menu={canEdit ? <SectionMenu section={s} sections={project.sections} taskCount={cols[s.id]?.length ?? 0} /> : undefined}>
             <SortableContext items={cols[s.id] ?? []} strategy={verticalListSortingStrategy}>
               {(cols[s.id] ?? []).map((id) => {
                 const t = byId.get(id);
@@ -93,7 +95,7 @@ export function BoardView({ project, tasks, aiActive, canEdit }: ViewProps) {
   );
 }
 
-function Column({ id, name, count, done, children }: { id: string; name: string; count: number; done: number; children: React.ReactNode }) {
+function Column({ id, name, count, done, menu, children }: { id: string; name: string; count: number; done: number; menu?: React.ReactNode; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <section ref={setNodeRef} className={cn("flex w-[288px] shrink-0 flex-col rounded-2xl border bg-sidebar/60 transition-colors", isOver ? "border-line-strong" : "border-transparent")}>
@@ -101,6 +103,7 @@ function Column({ id, name, count, done, children }: { id: string; name: string;
         <span className="text-[13px] font-semibold">{name}</span>
         <span className="text-[12px] tabular text-faint">{count}</span>
         {count > 0 && <span className="ml-auto h-1 w-12 overflow-hidden rounded-full bg-active"><span className="block h-full rounded-full bg-success" style={{ width: `${(done / count) * 100}%` }} /></span>}
+        <span className={count > 0 ? "" : "ml-auto"}>{menu}</span>
       </header>
       <div className="flex min-h-[60px] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">{children}</div>
     </section>

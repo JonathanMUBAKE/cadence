@@ -18,6 +18,7 @@ export function useUserMap() {
   return useMemo(() => new Map((data ?? []).map((u) => [u.id, u])), [data]);
 }
 export const useProjects = () => useQuery({ queryKey: ["projects"], queryFn: () => api.get<ProjectSummary[]>("/api/projects") });
+export const useArchivedProjects = (enabled: boolean) => useQuery({ queryKey: ["projects", "archived"], queryFn: () => api.get<ProjectSummary[]>("/api/projects?archived=true"), enabled });
 export const useProject = (id?: string) => useQuery({ queryKey: ["project", id], queryFn: () => api.get<ProjectDetail>(`/api/projects/${id}`), enabled: !!id });
 export const useProjectTasks = (id?: string) => useQuery({ queryKey: ["tasks", "project", id], queryFn: () => api.get<Task[]>(`/api/projects/${id}/tasks`), enabled: !!id });
 export const useStats = (id?: string) => useQuery({ queryKey: ["stats", id], queryFn: () => api.get<Stats>(`/api/projects/${id}/stats`), enabled: !!id });

@@ -13,7 +13,7 @@ export interface ProjectSummary {
   task_count: number; done_count: number; overdue_count: number; members: string[];
 }
 export interface ProjectDetail extends Omit<ProjectSummary, "task_count" | "done_count" | "overdue_count" | "members"> {
-  sections: Section[]; members: { user_id: string; role: Role }[];
+  sections: Section[]; members: { user_id: string; role: Role }[]; archived: boolean;
 }
 export interface Task {
   id: string; number: number; project_id: string; section_id: string | null; parent_id: string | null;
@@ -21,7 +21,7 @@ export interface Task {
   start_on: string | null; due_on: string | null; completed: boolean; completed_at: string | null; position: number;
   tags: string[]; created_at: string; updated_at: string; subtask_count?: number; subtask_done?: number; comment_count?: number;
 }
-export interface Comment { id: string; task_id: string; author_id: string; body: string; ai_run_id: string | null; created_at: string }
+export interface Comment { id: string; task_id: string; author_id: string; body: string; ai_run_id: string | null; created_at: string; edited_at: string | null }
 export interface Activity { id: string; project_id: string | null; task_id: string | null; actor_id: string; kind: string; data: Record<string, unknown>; created_at: string }
 export interface TaskDetail extends Task {
   role: Role;

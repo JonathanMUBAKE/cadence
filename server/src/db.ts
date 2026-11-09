@@ -174,9 +174,37 @@ CREATE TABLE IF NOT EXISTS ai_rules (
 );
 `;
 
+/**
+ * Migrations versionnées (PRAGMA user_version).
+ * SCHEMA crée les tables manquantes ; chaque migration ajoute ce qu'une base plus ancienne n'a pas.
+ * Règle : on n'édite jamais une migration publiée, on en ajoute une nouvelle à la fin.
+ */
+const MIGRATIONS: ((db: DB) => void)[] = [
+  /* v1 */ () => {},
+  /* v2 */ (db) => addColumn(db, "ai_runs", "rule_id", "TEXT"),
+  /* v3 */ (db) => addColumn(db, "comments", "edited_at", "TEXT"),
+];
+
+function addColumn(db: DB, table: string, column: string, type: string) {
+  const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
 export function openDb(path = ":memory:"): DB {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    db.exec("BEGIN");
+    try {
+      MIGRATIONS[v](db);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw new Error(`Migration v${v + 1} échouée : ${(e as Error).message}`);
+    }
+  }
   return db;
 }
 

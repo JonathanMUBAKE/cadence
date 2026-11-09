@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ChevronDown, Plus } from "lucide-react";
 import { cn } from "@/components/ui";
 import { TaskRow } from "@/components/TaskRow";
+import { SectionMenu } from "@/components/SectionMenu";
 import { useCreateTask, useUpdateTask, useUserMap } from "@/lib/hooks";
 import { useShell } from "@/lib/shell";
 import { api } from "@/lib/api";
@@ -34,6 +35,7 @@ export function ListView({ project, tasks, aiActive, canEdit }: ViewProps) {
                 <span className="text-[13.5px] font-semibold">{s.name}</span>
               </button>
               <span className="text-[12px] tabular text-faint">{items.length}</span>
+              {canEdit && <span className="ml-auto opacity-60 transition-opacity group-hover:opacity-100"><SectionMenu section={s} sections={project.sections} axis="vertical" taskCount={tasks.filter((t) => t.section_id === s.id).length} /></span>}
             </div>
             {!collapsed[s.id] && (
               <div className="sm:px-4">

@@ -24,7 +24,7 @@ export interface Task {
   completed_at: string | null; position: number; tags: string[]; created_at: string; updated_at: string;
   subtask_count?: number; subtask_done?: number; comment_count?: number;
 }
-export interface Comment { id: string; task_id: string; author_id: string; body: string; ai_run_id: string | null; created_at: string }
+export interface Comment { id: string; task_id: string; author_id: string; body: string; ai_run_id: string | null; created_at: string; edited_at: string | null }
 export interface Activity { id: string; project_id: string | null; task_id: string | null; actor_id: string; kind: string; data: Record<string, unknown>; created_at: string }
 export interface Notification {
   id: string; user_id: string; kind: string; title: string; body: string; task_id: string | null;
@@ -108,14 +108,14 @@ export class Services {
   }
 
   // ----------------------------------------------------------- projets
-  listProjects(actorId: string) {
+  listProjects(actorId: string, opts: { archived?: boolean } = {}) {
     const rows = all<Row>(this.db, `
       SELECT p.*, m.role,
         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL) AS task_count,
         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL AND t.completed = 1) AS done_count,
         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.completed = 0 AND t.due_on < ?) AS overdue_count
       FROM projects p JOIN memberships m ON m.project_id = p.id AND m.user_id = ?
-      WHERE p.archived = 0 ORDER BY p.created_at`, today(), actorId);
+      WHERE p.archived = ? ORDER BY p.created_at`, today(), actorId, opts.archived ? 1 : 0);
     return rows.map((r) => ({
       ...toProject(r), role: r.role as Role,
       task_count: Number(r.task_count), done_count: Number(r.done_count), overdue_count: Number(r.overdue_count),
@@ -170,6 +170,20 @@ export class Services {
     return this.members(projectId);
   }
 
+  deleteProject(actorId: string, projectId: string, confirm: string) {
+    this.require(actorId, projectId, "admin");
+    const p = get<{ name: string }>(this.db, "SELECT name FROM projects WHERE id = ?", projectId)!;
+    if (confirm.trim() !== p.name) throw badRequest("Saisissez le nom exact du projet pour confirmer la suppression");
+    const members = this.members(projectId).map((m) => m.user_id);
+    tx(this.db, () => {
+      run(this.db, "DELETE FROM notifications WHERE project_id = ?", projectId);
+      run(this.db, "DELETE FROM activity WHERE project_id = ?", projectId);
+      run(this.db, "DELETE FROM projects WHERE id = ?", projectId);
+    });
+    this.log(actorId, "project.deleted", { data: { name: p.name } });
+    this.bus.emit({ type: "project.deleted", actorId, projectId, members });
+  }
+
   // ----------------------------------------------------------- sections
   createSection(actorId: string, projectId: string, name: string) {
     this.require(actorId, projectId, "editor");
@@ -188,6 +202,22 @@ export class Services {
     this.bus.emit({ type: "project.changed", actorId, projectId: s.project_id });
     return get<Section>(this.db, "SELECT * FROM sections WHERE id = ?", sectionId)!;
   }
+  moveSection(actorId: string, sectionId: string, direction: "left" | "right") {
+    const s = get<Section>(this.db, "SELECT * FROM sections WHERE id = ?", sectionId);
+    if (!s) throw notFound("Section introuvable");
+    this.require(actorId, s.project_id, "editor");
+    const list = all<Section>(this.db, "SELECT * FROM sections WHERE project_id = ? ORDER BY position", s.project_id);
+    const i = list.findIndex((x) => x.id === sectionId);
+    const j = direction === "left" ? i - 1 : i + 1;
+    if (j < 0 || j >= list.length) return list;
+    tx(this.db, () => {
+      run(this.db, "UPDATE sections SET position = ? WHERE id = ?", list[j].position, list[i].id);
+      run(this.db, "UPDATE sections SET position = ? WHERE id = ?", list[i].position, list[j].id);
+    });
+    this.bus.emit({ type: "project.changed", actorId, projectId: s.project_id });
+    return all<Section>(this.db, "SELECT * FROM sections WHERE project_id = ? ORDER BY position", s.project_id);
+  }
+
   deleteSection(actorId: string, sectionId: string) {
     const s = get<Section>(this.db, "SELECT * FROM sections WHERE id = ?", sectionId);
     if (!s) throw notFound("Section introuvable");
@@ -309,6 +339,9 @@ export class Services {
   updateTask(actorId: string, ref: string, patch: TaskPatch): Task {
     const before = this.taskRow(this.resolveTaskId(ref));
     this.require(actorId, before.project_id, "editor");
+    const start = patch.start_on !== undefined ? patch.start_on : before.start_on;
+    const due = patch.due_on !== undefined ? patch.due_on : before.due_on;
+    if (start && due && start > due) throw badRequest("La date de début doit précéder l'échéance");
     const fields = ["title", "description", "section_id", "assignee_id", "priority", "start_on", "due_on", "completed", "position", "tags"] as const;
     const sets: string[] = []; const vals: unknown[] = []; const changes: string[] = []; const previous: Record<string, unknown> = {};
     for (const k of fields) {
@@ -356,6 +389,44 @@ export class Services {
     return this.updateTask(actorId, task.id, { section_id: to.section_id, position });
   }
 
+  duplicateTask(actorId: string, ref: string, opts: { subtasks?: boolean } = {}): Task {
+    const src = this.taskRow(this.resolveTaskId(ref));
+    this.require(actorId, src.project_id, "editor");
+    const copy = (t: Task, parentId: string | null, title: string) => this.createTask(actorId, {
+      project_id: t.project_id, title, description: t.description, section_id: parentId ? null : t.section_id, parent_id: parentId,
+      assignee_id: t.assignee_id, priority: t.priority, start_on: t.start_on, due_on: t.due_on, tags: t.tags,
+    });
+    const created = copy(src, src.parent_id, `Copie de ${src.title}`);
+    if (opts.subtasks) {
+      for (const sub of all<Row>(this.db, "SELECT * FROM tasks WHERE parent_id = ? ORDER BY position", src.id).map(toTask)) copy(sub, created.id, sub.title);
+    }
+    return this.taskRow(created.id);
+  }
+
+  moveTaskToProject(actorId: string, ref: string, projectId: string): Task {
+    const t = this.taskRow(this.resolveTaskId(ref));
+    if (t.parent_id) throw badRequest("Une sous-tâche se déplace avec sa tâche parente");
+    this.require(actorId, t.project_id, "editor");
+    this.require(actorId, projectId, "editor");
+    if (t.project_id === projectId) return t;
+    const section = get<{ id: string }>(this.db, "SELECT id FROM sections WHERE project_id = ? ORDER BY position LIMIT 1", projectId)?.id ?? null;
+    const ids = [t.id];
+    for (let i = 0; i < ids.length; i++) all<{ id: string }>(this.db, "SELECT id FROM tasks WHERE parent_id = ?", ids[i]).forEach((r) => ids.push(r.id));
+    tx(this.db, () => {
+      for (const id of ids) {
+        const row = this.taskRow(id);
+        const keep = row.assignee_id && this.role(row.assignee_id, projectId) ? row.assignee_id : null;
+        run(this.db, "UPDATE tasks SET project_id = ?, assignee_id = ?, updated_at = ? WHERE id = ?", projectId, keep, now(), id);
+      }
+      run(this.db, "UPDATE tasks SET section_id = ?, position = ? WHERE id = ?", section, this.endPosition(projectId, section, null), t.id);
+      run(this.db, "UPDATE activity SET project_id = ? WHERE task_id IN (" + ids.map(() => "?").join(",") + ")", projectId, ...ids);
+    });
+    this.log(actorId, "task.moved_project", { projectId, taskId: t.id, data: { from: t.project_id, to: projectId } });
+    this.bus.emit({ type: "task.deleted", actorId, projectId: t.project_id, taskId: t.id });
+    this.bus.emit({ type: "task.updated", actorId, projectId, taskId: t.id, changes: ["project_id"], previous: { project_id: t.project_id } });
+    return this.taskRow(t.id);
+  }
+
   deleteTask(actorId: string, ref: string) {
     const task = this.taskRow(this.resolveTaskId(ref));
     this.require(actorId, task.project_id, "editor");
@@ -386,6 +457,29 @@ export class Services {
     }
     this.bus.emit({ type: "comment.created", actorId, projectId: task.project_id, taskId: task.id, commentId: id, mentions });
     return get<Comment>(this.db, "SELECT * FROM comments WHERE id = ?", id)!;
+  }
+
+  private commentRow(id: string) {
+    const c = get<Comment>(this.db, "SELECT * FROM comments WHERE id = ?", id);
+    if (!c) throw notFound("Commentaire introuvable");
+    return { c, task: this.taskRow(c.task_id) };
+  }
+  updateComment(actorId: string, id: string, body: string): Comment {
+    const { c, task } = this.commentRow(id);
+    this.require(actorId, task.project_id, "commenter");
+    if (c.author_id !== actorId) throw forbidden("Seul l'auteur peut modifier ce commentaire");
+    if (!body.trim()) throw badRequest("Le commentaire est vide");
+    run(this.db, "UPDATE comments SET body = ?, edited_at = ? WHERE id = ?", body.trim(), now(), id);
+    this.bus.emit({ type: "task.updated", actorId, projectId: task.project_id, taskId: task.id, changes: ["comment"], previous: {} });
+    return get<Comment>(this.db, "SELECT * FROM comments WHERE id = ?", id)!;
+  }
+  deleteComment(actorId: string, id: string) {
+    const { c, task } = this.commentRow(id);
+    const role = this.require(actorId, task.project_id, "commenter");
+    if (c.author_id !== actorId && role !== "admin") throw forbidden("Seuls l'auteur et les administrateurs du projet peuvent supprimer ce commentaire");
+    run(this.db, "DELETE FROM comments WHERE id = ?", id);
+    this.log(actorId, "comment.deleted", { projectId: task.project_id, taskId: task.id, data: { author: c.author_id } });
+    this.bus.emit({ type: "task.updated", actorId, projectId: task.project_id, taskId: task.id, changes: ["comment"], previous: {} });
   }
 
   // ----------------------------------------------------------- notifications

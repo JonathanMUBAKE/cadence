@@ -70,7 +70,7 @@ export async function buildApp(opts: AppOptions = {}) {
     r.get("/api/users", async () => svc.listUsers());
 
     // ---------------------------------------------------------------- projets
-    r.get("/api/projects", async (req) => svc.listProjects(me(req)));
+    r.get("/api/projects", async (req) => svc.listProjects(me(req), { archived: (req.query as { archived?: string }).archived === "true" }));
     r.post("/api/projects", async (req) => svc.createProject(me(req), z.object({
       name: z.string().min(1).max(120), description: z.string().max(5000).optional(), color: z.string().optional(), icon: z.string().optional(), due_on: date.optional(),
     }).parse(req.body)));
@@ -79,6 +79,7 @@ export async function buildApp(opts: AppOptions = {}) {
       name: z.string().min(1).max(120).optional(), description: z.string().max(5000).optional(), color: z.string().optional(), icon: z.string().optional(),
       status: z.enum(["on_track", "at_risk", "off_track", "done"]).optional(), due_on: date.optional(), archived: z.boolean().optional(),
     }).parse(req.body)));
+    r.delete<{ Params: { id: string } }>("/api/projects/:id", async (req) => { svc.deleteProject(me(req), req.params.id, z.object({ confirm: z.string() }).parse(req.body ?? {}).confirm); return { ok: true }; });
     r.put<{ Params: { id: string; userId: string } }>("/api/projects/:id/members/:userId", async (req) =>
       svc.setMember(me(req), req.params.id, req.params.userId, z.object({ role: z.enum(["viewer", "commenter", "editor", "admin"]).nullable() }).parse(req.body).role));
     r.get<{ Params: { id: string } }>("/api/projects/:id/tasks", async (req) => svc.listTasks(me(req), { project_id: req.params.id }));
@@ -99,6 +100,7 @@ export async function buildApp(opts: AppOptions = {}) {
     });
     r.post<{ Params: { id: string } }>("/api/projects/:id/sections", async (req) => svc.createSection(me(req), req.params.id, z.object({ name: z.string().max(80) }).parse(req.body).name));
     r.patch<{ Params: { id: string } }>("/api/sections/:id", async (req) => svc.updateSection(me(req), req.params.id, z.object({ name: z.string().max(80).optional(), position: z.number().optional() }).parse(req.body)));
+    r.post<{ Params: { id: string } }>("/api/sections/:id/move", async (req) => svc.moveSection(me(req), req.params.id, z.object({ direction: z.enum(["left", "right"]) }).parse(req.body).direction));
     r.delete<{ Params: { id: string } }>("/api/sections/:id", async (req) => { svc.deleteSection(me(req), req.params.id); return { ok: true }; });
 
     // ---------------------------------------------------------------- tâches
@@ -122,6 +124,10 @@ export async function buildApp(opts: AppOptions = {}) {
     r.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => svc.getTask(me(req), req.params.id));
     r.patch<{ Params: { id: string } }>("/api/tasks/:id", async (req) => svc.updateTask(me(req), req.params.id, TaskBody.omit({ project_id: true, parent_id: true }).partial().extend({ completed: z.boolean().optional() }).parse(req.body)));
     r.post<{ Params: { id: string } }>("/api/tasks/:id/move", async (req) => svc.moveTask(me(req), req.params.id, z.object({ section_id: z.string(), before_id: z.string().nullable().optional(), after_id: z.string().nullable().optional() }).parse(req.body)));
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/duplicate", async (req) => svc.duplicateTask(me(req), req.params.id, z.object({ subtasks: z.boolean().optional() }).parse(req.body ?? {})));
+    r.post<{ Params: { id: string } }>("/api/tasks/:id/move-project", async (req) => svc.moveTaskToProject(me(req), req.params.id, z.object({ project_id: z.string() }).parse(req.body).project_id));
+    r.patch<{ Params: { id: string } }>("/api/comments/:id", async (req) => svc.updateComment(me(req), req.params.id, z.object({ body: z.string().min(1).max(10000) }).parse(req.body).body));
+    r.delete<{ Params: { id: string } }>("/api/comments/:id", async (req) => { svc.deleteComment(me(req), req.params.id); return { ok: true }; });
     r.delete<{ Params: { id: string } }>("/api/tasks/:id", async (req) => { svc.deleteTask(me(req), req.params.id); return { ok: true }; });
     r.post<{ Params: { id: string } }>("/api/tasks/:id/comments", async (req) => svc.addComment(me(req), req.params.id, z.object({ body: z.string().min(1).max(10000) }).parse(req.body).body));
 
@@ -192,6 +198,7 @@ export async function buildApp(opts: AppOptions = {}) {
       if (!e.projectId || !svc.role(userId, e.projectId)) return null;
       return { type: e.type, runId: e.runId, projectId: e.projectId, taskId: e.taskId, status: (e as { status?: string }).status };
     }
+    if (e.type === "project.deleted") return e.members.includes(userId) ? { type: e.type, projectId: e.projectId } : null;
     if (!svc.role(userId, e.projectId)) return null;
     return { type: e.type, projectId: e.projectId, taskId: "taskId" in e ? e.taskId : null, actorId: e.actorId };
   }
